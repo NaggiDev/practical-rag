@@ -12,14 +12,27 @@
   - Create configuration management system for data sources and system settings
   - _Requirements: 5.1, 5.3_
 
-- [ ] 2. Implement core data models and validation
-  - [ ] 2.1 Create data model classes with validation
+- [-] 2. Implement core data models and validation
+
+
+
+  - [x] 2.1 Create data model classes with validation
+
+
     - Implement Query, QueryResult, DataSource, Content, and ContentChunk classes
     - Add input validation and sanitization methods
     - Write unit tests for model validation and serialization
     - _Requirements: 3.1, 5.3_
 
-  - [ ] 2.2 Implement configuration models
+  - [x] 2.2 Implement configuration models
+
+
+
+
+
+
+
+
     - Create DataSourceConfig class with type-specific validation
     - Implement system configuration management
     - Add environment variable handling and validation

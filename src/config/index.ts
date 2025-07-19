@@ -55,7 +55,10 @@ export class ConfigManager {
     }
 }
 
+export * from './configManager';
 export * from './defaults';
 export * from './env';
+export * from './envValidator';
 export * from './file';
 export * from './validation';
+
