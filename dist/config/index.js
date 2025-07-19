@@ -60,8 +60,10 @@ class ConfigManager {
     }
 }
 exports.ConfigManager = ConfigManager;
+__exportStar(require("./configManager"), exports);
 __exportStar(require("./defaults"), exports);
 __exportStar(require("./env"), exports);
+__exportStar(require("./envValidator"), exports);
 __exportStar(require("./file"), exports);
 __exportStar(require("./validation"), exports);
 //# sourceMappingURL=index.js.map

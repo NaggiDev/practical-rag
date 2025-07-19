@@ -1,3 +1,4 @@
+import { DataSourceConfig } from './dataSource';
 export interface SystemConfig {
     server: ServerConfig;
     database: DatabaseConfig;
@@ -5,7 +6,7 @@ export interface SystemConfig {
     embedding: EmbeddingConfig;
     search: SearchConfig;
     monitoring: MonitoringConfig;
-    dataSources: import('./dataSource').DataSourceConfig[];
+    dataSources: DataSourceConfig[];
 }
 export interface ServerConfig {
     port: number;
@@ -85,5 +86,33 @@ export interface MonitoringConfig {
         interval: number;
         timeout: number;
     };
+}
+export declare class SystemConfigModel implements SystemConfig {
+    readonly server: ServerConfig;
+    readonly database: DatabaseConfig;
+    readonly cache: CacheConfig;
+    readonly embedding: EmbeddingConfig;
+    readonly search: SearchConfig;
+    readonly monitoring: MonitoringConfig;
+    readonly dataSources: DataSourceConfig[];
+    constructor(data: Partial<SystemConfig>);
+    private sanitize;
+    private sanitizeServerConfig;
+    private sanitizeDatabaseConfig;
+    private sanitizeCacheConfig;
+    private sanitizeEmbeddingConfig;
+    private sanitizeSearchConfig;
+    private sanitizeMonitoringConfig;
+    private validate;
+    private getDefaultServerConfig;
+    private getDefaultDatabaseConfig;
+    private getDefaultCacheConfig;
+    private getDefaultEmbeddingConfig;
+    private getDefaultSearchConfig;
+    private getDefaultMonitoringConfig;
+    toJSON(): SystemConfig;
+    static fromJSON(data: any): SystemConfigModel;
+    static fromEnvironment(): SystemConfigModel;
+    static loadFromFile(filePath: string): SystemConfigModel;
 }
 //# sourceMappingURL=config.d.ts.map

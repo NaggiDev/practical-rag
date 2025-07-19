@@ -35,4 +35,30 @@ export interface SourceReference {
     relevanceScore: number;
     url?: string;
 }
+export declare class QueryModel implements Query {
+    readonly id: string;
+    readonly text: string;
+    readonly context?: object;
+    readonly filters?: QueryFilter[];
+    readonly timestamp: Date;
+    readonly userId?: string;
+    constructor(data: Partial<Query>);
+    private sanitize;
+    private validate;
+    toJSON(): Query;
+    static fromJSON(data: any): QueryModel;
+}
+export declare class QueryResultModel implements QueryResult {
+    readonly id: string;
+    readonly response: string;
+    readonly sources: SourceReference[];
+    readonly confidence: number;
+    readonly processingTime: number;
+    readonly cached: boolean;
+    constructor(data: Partial<QueryResult>);
+    private sanitize;
+    private validate;
+    toJSON(): QueryResult;
+    static fromJSON(data: any): QueryResultModel;
+}
 //# sourceMappingURL=query.d.ts.map
