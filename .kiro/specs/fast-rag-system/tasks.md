@@ -77,7 +77,13 @@
     - Write integration tests for database connectivity
     - _Requirements: 2.2_
 
-  - [ ] 3.4 Implement API data source connectors
+  - [x] 3.4 Implement API data source connectors
+
+
+
+
+
+
     - Create APIConnector class for REST endpoint integration
     - Implement authentication handling and rate limiting
     - Add response parsing and data transformation
