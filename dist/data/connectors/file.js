@@ -499,6 +499,12 @@ class FileConnector extends base_1.DataSourceConnector {
         return Array.from(this.fileWatchers.keys());
     }
     triggerFileChangeEvent(filePath, eventType) {
+        if (!this.isFileSupported(filePath)) {
+            return;
+        }
+        if (this.config.excludePatterns && this.isExcluded(filePath)) {
+            return;
+        }
         const event = {
             eventType,
             filePath,

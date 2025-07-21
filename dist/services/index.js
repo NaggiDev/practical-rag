@@ -15,6 +15,7 @@ var __exportStar = (this && this.__exportStar) || function(m, exports) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 __exportStar(require("./cache"), exports);
+__exportStar(require("./cacheWarming"), exports);
 __exportStar(require("./dataSourceManager"), exports);
 __exportStar(require("./embedding"), exports);
 __exportStar(require("./indexing"), exports);

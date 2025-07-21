@@ -1,4 +1,5 @@
 export * from './cache';
+export * from './cacheWarming';
 export * from './dataSourceManager';
 export * from './embedding';
 export * from './indexing';
