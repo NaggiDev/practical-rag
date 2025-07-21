@@ -43,6 +43,417 @@ export interface IndexStats {
     lastUpdated: Date;
 }
 
+export interface HybridSearchOptions extends SearchOptions {
+    keywordWeight?: number;
+    vectorWeight?: number;
+    keywordBoost?: Record<string, number>;
+    rerankResults?: boolean;
+}
+
+export interface RankedSearchResult extends SearchResult {
+    vectorScore: number;
+    keywordScore?: number;
+    finalScore: number;
+    rankingFactors: {
+        semantic: number;
+        keyword?: number;
+        metadata?: number;
+        recency?: number;
+    };
+}
+
+export class VectorSearchEngine {
+    private vectorDb: VectorDatabase;
+    private embeddingService: any; // Will be injected
+    private isInitialized: boolean = false;
+
+    constructor(vectorDb: VectorDatabase, embeddingService?: any) {
+        this.vectorDb = vectorDb;
+        this.embeddingService = embeddingService;
+    }
+
+    public async initialize(): Promise<void> {
+        if (this.isInitialized) {
+            return;
+        }
+
+        await this.vectorDb.initialize();
+        this.isInitialized = true;
+    }
+
+    public async semanticSearch(
+        query: string,
+        options: SearchOptions
+    ): Promise<RankedSearchResult[]> {
+        if (!this.isInitialized) {
+            await this.initialize();
+        }
+
+        if (!this.embeddingService) {
+            throw new DataSourceError('Embedding service not configured', 'EMBEDDING_SERVICE_MISSING');
+        }
+
+        try {
+            // Generate query embedding
+            const embeddingResult = await this.embeddingService.generateEmbedding(query);
+            const queryVector = embeddingResult.embedding;
+
+            // Perform vector search
+            const vectorResults = await this.vectorDb.searchVectors(queryVector, options);
+
+            // Convert to ranked results with semantic scoring
+            const rankedResults: RankedSearchResult[] = vectorResults.map(result => ({
+                ...result,
+                vectorScore: result.score,
+                finalScore: result.score,
+                rankingFactors: {
+                    semantic: result.score,
+                    metadata: 0,
+                    recency: 0
+                }
+            }));
+
+            // Apply additional ranking factors
+            return this.applyRankingFactors(rankedResults, query, options);
+        } catch (error) {
+            throw new DataSourceError(
+                `Semantic search failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+                'SEMANTIC_SEARCH_ERROR'
+            );
+        }
+    }
+
+    public async hybridSearch(
+        query: string,
+        options: HybridSearchOptions
+    ): Promise<RankedSearchResult[]> {
+        if (!this.isInitialized) {
+            await this.initialize();
+        }
+
+        try {
+            const vectorWeight = options.vectorWeight ?? 0.7;
+            const keywordWeight = options.keywordWeight ?? 0.3;
+
+            // Perform semantic search
+            const semanticResults = await this.semanticSearch(query, options);
+
+            // Perform keyword search
+            const keywordResults = await this.keywordSearch(query, options);
+
+            // Combine and rerank results
+            const combinedResults = this.combineSearchResults(
+                semanticResults,
+                keywordResults,
+                vectorWeight,
+                keywordWeight
+            );
+
+            // Apply reranking if requested
+            if (options.rerankResults) {
+                return this.rerankResults(combinedResults, query, options);
+            }
+
+            return combinedResults.slice(0, options.topK);
+        } catch (error) {
+            throw new DataSourceError(
+                `Hybrid search failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+                'HYBRID_SEARCH_ERROR'
+            );
+        }
+    }
+
+    private async keywordSearch(
+        query: string,
+        options: HybridSearchOptions
+    ): Promise<RankedSearchResult[]> {
+        // Extract keywords from query
+        const keywords = this.extractKeywords(query);
+
+        // For now, we'll simulate keyword search by filtering vector results
+        // In a production system, this would use a full-text search engine like Elasticsearch
+        const allResults = await this.vectorDb.searchVectors(
+            new Array(384).fill(0), // Dummy vector for getting all results
+            { ...options, topK: options.topK * 3 } // Get more results for filtering
+        );
+
+        const keywordResults: RankedSearchResult[] = allResults
+            .map(result => {
+                const keywordScore = this.calculateKeywordScore(keywords, result.metadata, options.keywordBoost);
+                return {
+                    ...result,
+                    vectorScore: result.score,
+                    keywordScore,
+                    finalScore: keywordScore,
+                    rankingFactors: {
+                        semantic: result.score,
+                        keyword: keywordScore,
+                        metadata: 0,
+                        recency: 0
+                    }
+                };
+            })
+            .filter(result => (result.keywordScore ?? 0) > 0)
+            .sort((a, b) => (b.keywordScore ?? 0) - (a.keywordScore ?? 0));
+
+        return keywordResults.slice(0, options.topK);
+    }
+
+    private extractKeywords(query: string): string[] {
+        // Simple keyword extraction - in production, use more sophisticated NLP
+        return query
+            .toLowerCase()
+            .replace(/[^\w\s]/g, '')
+            .split(/\s+/)
+            .filter(word => word.length > 2)
+            .filter(word => !this.isStopWord(word));
+    }
+
+    private isStopWord(word: string): boolean {
+        const stopWords = new Set([
+            'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+            'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'have',
+            'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should'
+        ]);
+        return stopWords.has(word.toLowerCase());
+    }
+
+    private calculateKeywordScore(
+        keywords: string[],
+        metadata: Record<string, any>,
+        keywordBoost?: Record<string, number>
+    ): number {
+        let score = 0;
+        const text = JSON.stringify(metadata).toLowerCase();
+
+        for (const keyword of keywords) {
+            const occurrences = (text.match(new RegExp(keyword, 'g')) || []).length;
+            const boost = keywordBoost?.[keyword] ?? 1;
+            score += occurrences * boost;
+        }
+
+        // Normalize score
+        return Math.min(score / (keywords.length * 10), 1);
+    }
+
+    private combineSearchResults(
+        semanticResults: RankedSearchResult[],
+        keywordResults: RankedSearchResult[],
+        vectorWeight: number,
+        keywordWeight: number
+    ): RankedSearchResult[] {
+        const resultMap = new Map<string, RankedSearchResult>();
+
+        // Add semantic results
+        for (const result of semanticResults) {
+            resultMap.set(result.id, {
+                ...result,
+                finalScore: result.vectorScore * vectorWeight,
+                rankingFactors: {
+                    ...result.rankingFactors,
+                    semantic: result.vectorScore * vectorWeight
+                }
+            });
+        }
+
+        // Merge keyword results
+        for (const result of keywordResults) {
+            const existing = resultMap.get(result.id);
+            const keywordScore = result.keywordScore ?? 0;
+            if (existing) {
+                // Combine scores
+                existing.keywordScore = keywordScore;
+                existing.finalScore = (existing.vectorScore * vectorWeight) + (keywordScore * keywordWeight);
+                existing.rankingFactors.keyword = keywordScore * keywordWeight;
+            } else {
+                // Add as keyword-only result
+                resultMap.set(result.id, {
+                    ...result,
+                    keywordScore,
+                    finalScore: keywordScore * keywordWeight,
+                    rankingFactors: {
+                        semantic: 0,
+                        keyword: keywordScore * keywordWeight,
+                        metadata: 0,
+                        recency: 0
+                    }
+                });
+            }
+        }
+
+        // Sort by final score
+        return Array.from(resultMap.values())
+            .sort((a, b) => b.finalScore - a.finalScore);
+    }
+
+    private applyRankingFactors(
+        results: RankedSearchResult[],
+        query: string,
+        _options: SearchOptions
+    ): RankedSearchResult[] {
+        return results.map(result => {
+            let finalScore = result.vectorScore;
+            const factors = { ...result.rankingFactors };
+
+            // Apply metadata boost
+            const metadataBoost = this.calculateMetadataBoost(result.metadata, query);
+            factors.metadata = metadataBoost;
+            finalScore += metadataBoost * 0.1;
+
+            // Apply recency boost
+            const recencyBoost = this.calculateRecencyBoost(result.metadata);
+            factors.recency = recencyBoost;
+            finalScore += recencyBoost * 0.05;
+
+            return {
+                ...result,
+                finalScore: Math.min(finalScore, 1),
+                rankingFactors: factors
+            };
+        }).sort((a, b) => b.finalScore - a.finalScore);
+    }
+
+    private calculateMetadataBoost(metadata: Record<string, any>, query: string): number {
+        let boost = 0;
+
+        // Title match boost
+        if (metadata.title && typeof metadata.title === 'string') {
+            const titleMatch = metadata.title.toLowerCase().includes(query.toLowerCase());
+            if (titleMatch) boost += 0.3;
+        }
+
+        // Category/tag boost
+        if (metadata.category || metadata.tags) {
+            const categoryText = [metadata.category, ...(metadata.tags || [])].join(' ').toLowerCase();
+            if (categoryText.includes(query.toLowerCase())) {
+                boost += 0.2;
+            }
+        }
+
+        return Math.min(boost, 0.5);
+    }
+
+    private calculateRecencyBoost(metadata: Record<string, any>): number {
+        const now = new Date();
+        const createdAt = metadata.createdAt ? new Date(metadata.createdAt) : null;
+        const modifiedAt = metadata.modifiedAt ? new Date(metadata.modifiedAt) : null;
+
+        const relevantDate = modifiedAt || createdAt;
+        if (!relevantDate) return 0;
+
+        const daysDiff = (now.getTime() - relevantDate.getTime()) / (1000 * 60 * 60 * 24);
+
+        // Boost recent content (within 30 days)
+        if (daysDiff <= 30) {
+            return Math.max(0, (30 - daysDiff) / 30 * 0.2);
+        }
+
+        return 0;
+    }
+
+    private async rerankResults(
+        results: RankedSearchResult[],
+        _query: string,
+        options: HybridSearchOptions
+    ): Promise<RankedSearchResult[]> {
+        // Advanced reranking using cross-encoder or similar
+        // For now, implement a simple diversity-based reranking
+        const reranked: RankedSearchResult[] = [];
+        const used = new Set<string>();
+
+        // First, add the top result
+        if (results.length > 0) {
+            reranked.push(results[0]!);
+            used.add(results[0]!.id);
+        }
+
+        // Then add diverse results
+        for (const result of results.slice(1)) {
+            if (reranked.length >= options.topK) break;
+
+            // Check diversity (simple implementation)
+            const isDiverse = this.isDiverseResult(result, reranked);
+            if (isDiverse && !used.has(result.id)) {
+                reranked.push(result);
+                used.add(result.id);
+            }
+        }
+
+        // Fill remaining slots with highest scoring results
+        for (const result of results) {
+            if (reranked.length >= options.topK) break;
+            if (!used.has(result.id)) {
+                reranked.push(result);
+                used.add(result.id);
+            }
+        }
+
+        return reranked;
+    }
+
+    private isDiverseResult(result: RankedSearchResult, existing: RankedSearchResult[]): boolean {
+        // Simple diversity check based on metadata
+        for (const existingResult of existing) {
+            // Check if from same source
+            if (result.metadata.sourceId === existingResult.metadata.sourceId) {
+                return false;
+            }
+
+            // Check if similar category
+            if (result.metadata.category &&
+                result.metadata.category === existingResult.metadata.category) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    public async getSearchStats(): Promise<{
+        totalVectors: number;
+        averageResponseTime: number;
+        cacheHitRate: number;
+        lastOptimized: Date;
+    }> {
+        const indexStats = await this.vectorDb.getIndexStats();
+
+        return {
+            totalVectors: indexStats.totalVectors,
+            averageResponseTime: 0, // Would be tracked in production
+            cacheHitRate: 0, // Would be tracked in production
+            lastOptimized: indexStats.lastUpdated
+        };
+    }
+
+    public async healthCheck(): Promise<{ status: 'healthy' | 'unhealthy'; details: object }> {
+        try {
+            const vectorDbHealth = await this.vectorDb.healthCheck();
+            const embeddingHealth = this.embeddingService ?
+                await this.embeddingService.healthCheck() :
+                { status: 'unhealthy', details: { error: 'Embedding service not configured' } };
+
+            const isHealthy = vectorDbHealth.status === 'healthy' && embeddingHealth.status === 'healthy';
+
+            return {
+                status: isHealthy ? 'healthy' : 'unhealthy',
+                details: {
+                    vectorDatabase: vectorDbHealth,
+                    embeddingService: embeddingHealth,
+                    lastCheck: new Date().toISOString()
+                }
+            };
+        } catch (error) {
+            return {
+                status: 'unhealthy',
+                details: {
+                    error: error instanceof Error ? error.message : 'Unknown error',
+                    lastCheck: new Date().toISOString()
+                }
+            };
+        }
+    }
+}
+
 export class VectorDatabase {
     private config: VectorDatabaseConfig;
     private faissIndex?: IndexFlatL2;
