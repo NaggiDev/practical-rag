@@ -185,7 +185,7 @@ assa
     - Write API endpoint tests for all routes
     - _Requirements: 5.1, 5.3_
 
-  - [ ] 7.2 Implement query endpoints
+  - [x] 7.2 Implement query endpoints
     - Create POST /query endpoint with async processing support
     - Add query validation and error handling
     - Implement response formatting and source attribution
