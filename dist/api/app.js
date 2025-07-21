@@ -135,10 +135,12 @@ class ApiGateway {
                     'POST /query': 'Submit a query for processing',
                     'GET /sources': 'List all configured data sources',
                     'POST /sources': 'Add a new data source',
+                    'POST /sources/validate': 'Validate data source configuration without saving',
                     'GET /sources/:id': 'Get specific data source details',
                     'PUT /sources/:id': 'Update data source configuration',
                     'DELETE /sources/:id': 'Remove a data source',
-                    'POST /sources/:id/sync': 'Trigger manual sync for a data source'
+                    'POST /sources/:id/sync': 'Trigger manual sync for a data source',
+                    'GET /sources/:id/health': 'Get data source health status'
                 }
             });
         });

@@ -1,7 +1,7 @@
 import { NextFunction, Response, Router } from 'express';
 import Joi from 'joi';
-import { v4 as uuidv4 } from 'uuid';
 import { DataSourceConfigModel, DataSourceModel } from '../../models/dataSource';
+import { DataSourceManagerImpl } from '../../services/dataSourceManager';
 import { requireRole } from '../middleware/auth';
 import { sourcesRateLimitMiddleware } from '../middleware/rateLimit';
 import { commonSchemas, validateContentType, validateWithJoi } from '../middleware/validation';
@@ -11,6 +11,33 @@ export const sourcesRoutes = Router();
 // Apply sources-specific rate limiting
 sourcesRoutes.use(sourcesRateLimitMiddleware);
 
+// Initialize data source manager
+const dataSourceManager = new DataSourceManagerImpl();
+
+// Helper function to handle validation errors
+function handleValidationError(error: any, req: any, res: Response): boolean {
+    if (error instanceof Error && (
+        error.message.includes('validation failed') ||
+        error.message.includes('File type') ||
+        error.message.includes('Database connection string') ||
+        error.message.includes('API credentials') ||
+        error.message.includes('offsetParam') ||
+        error.message.includes('cursorParam') ||
+        error.message.includes('pageParam')
+    )) {
+        res.status(400).json({
+            error: {
+                code: 'VALIDATION_ERROR',
+                message: error.message,
+                timestamp: new Date(),
+                correlationId: req.correlationId
+            }
+        });
+        return true;
+    }
+    return false;
+}
+
 /**
  * Get all data sources
  * GET /sources
@@ -19,14 +46,18 @@ sourcesRoutes.get('/',
     validateWithJoi(commonSchemas.pagination, 'query'),
     async (req: any, res: Response, next: NextFunction): Promise<any> => {
         try {
-            const { page, limit } = req.query as any;
+            const { page, limit, sort, sortBy } = req.query as any;
 
-            // TODO: Implement actual data source retrieval from database
-            const mockSources = await getDataSources(page, limit);
+            const result = await dataSourceManager.getAllSources({
+                page,
+                limit,
+                sort,
+                sortBy
+            });
 
             res.status(200).json({
-                sources: mockSources.sources,
-                pagination: mockSources.pagination,
+                sources: result.items,
+                pagination: result.pagination,
                 metadata: {
                     timestamp: new Date(),
                     correlationId: req.correlationId
@@ -62,11 +93,11 @@ sourcesRoutes.post('/',
                 status: 'inactive'
             });
 
-            // TODO: Save to database and validate connection
-            const savedSource = await createDataSource(dataSource);
+            // Save to storage and validate connection
+            const savedSource = await dataSourceManager.createSource(dataSource);
 
             res.status(201).json({
-                source: savedSource.toJSON(),
+                source: savedSource,
                 metadata: {
                     timestamp: new Date(),
                     correlationId: req.correlationId,
@@ -75,6 +106,9 @@ sourcesRoutes.post('/',
             });
 
         } catch (error) {
+            if (handleValidationError(error, req, res)) {
+                return;
+            }
             next(error);
         }
     }
@@ -90,8 +124,7 @@ sourcesRoutes.get('/:sourceId',
         try {
             const { sourceId } = req.params;
 
-            // TODO: Implement actual data source retrieval
-            const source = await getDataSourceById(sourceId!);
+            const source = await dataSourceManager.getSourceById(sourceId!);
 
             if (!source) {
                 return res.status(404).json({
@@ -105,7 +138,7 @@ sourcesRoutes.get('/:sourceId',
             }
 
             res.status(200).json({
-                source: source.toJSON(),
+                source: source,
                 metadata: {
                     timestamp: new Date(),
                     correlationId: req.correlationId
@@ -133,7 +166,7 @@ sourcesRoutes.put('/:sourceId',
             const { name, type, config } = req.body;
 
             // Check if source exists
-            const existingSource = await getDataSourceById(sourceId!);
+            const existingSource = await dataSourceManager.getSourceById(sourceId!);
             if (!existingSource) {
                 return res.status(404).json({
                     error: {
@@ -150,18 +183,18 @@ sourcesRoutes.put('/:sourceId',
 
             // Update data source
             const updatedSource = new DataSourceModel({
-                ...existingSource.toJSON(),
+                ...existingSource,
                 name,
                 type,
                 config: configModel.config,
                 status: 'inactive' // Reset status when configuration changes
             });
 
-            // TODO: Save updated source and re-validate connection
-            const savedSource = await updateDataSource(sourceId!, updatedSource);
+            // Save updated source and re-validate connection
+            const savedSource = await dataSourceManager.updateSource(sourceId!, updatedSource);
 
             res.status(200).json({
-                source: savedSource.toJSON(),
+                source: savedSource,
                 metadata: {
                     timestamp: new Date(),
                     correlationId: req.correlationId,
@@ -170,6 +203,9 @@ sourcesRoutes.put('/:sourceId',
             });
 
         } catch (error) {
+            if (handleValidationError(error, req, res)) {
+                return;
+            }
             next(error);
         }
     }
@@ -187,7 +223,7 @@ sourcesRoutes.delete('/:sourceId',
             const { sourceId } = req.params;
 
             // Check if source exists
-            const existingSource = await getDataSourceById(sourceId!);
+            const existingSource = await dataSourceManager.getSourceById(sourceId!);
             if (!existingSource) {
                 return res.status(404).json({
                     error: {
@@ -199,8 +235,8 @@ sourcesRoutes.delete('/:sourceId',
                 });
             }
 
-            // TODO: Implement actual deletion with cleanup
-            const deleted = await deleteDataSource(sourceId!);
+            // Delete the data source
+            const deleted = await dataSourceManager.deleteSource(sourceId!);
 
             if (!deleted) {
                 return res.status(500).json({
@@ -240,42 +276,15 @@ sourcesRoutes.post('/:sourceId/sync',
         try {
             const { sourceId } = req.params;
 
-            // Check if source exists
-            const source = await getDataSourceById(sourceId!);
-            if (!source) {
-                return res.status(404).json({
-                    error: {
-                        code: 'SOURCE_NOT_FOUND',
-                        message: 'Data source not found',
-                        timestamp: new Date(),
-                        correlationId: req.correlationId
-                    }
-                });
-            }
-
-            // Check if source is active
-            if (source.status !== 'active') {
-                return res.status(400).json({
-                    error: {
-                        code: 'SOURCE_NOT_ACTIVE',
-                        message: 'Data source must be active to trigger sync',
-                        details: {
-                            currentStatus: source.status
-                        },
-                        timestamp: new Date(),
-                        correlationId: req.correlationId
-                    }
-                });
-            }
-
-            // TODO: Implement actual sync trigger
-            const syncResult = await triggerSync(sourceId!);
+            // Check if source exists and trigger sync
+            const syncResult = await dataSourceManager.triggerSync(sourceId!);
 
             res.status(200).json({
                 message: 'Sync triggered successfully',
                 sourceId,
                 syncId: syncResult.syncId,
                 estimatedDuration: syncResult.estimatedDuration,
+                status: syncResult.status,
                 metadata: {
                     timestamp: new Date(),
                     correlationId: req.correlationId,
@@ -284,6 +293,29 @@ sourcesRoutes.post('/:sourceId/sync',
             });
 
         } catch (error) {
+            if (error instanceof Error) {
+                if (error.message === 'Data source not found') {
+                    return res.status(404).json({
+                        error: {
+                            code: 'SOURCE_NOT_FOUND',
+                            message: 'Data source not found',
+                            timestamp: new Date(),
+                            correlationId: req.correlationId
+                        }
+                    });
+                }
+
+                if (error.message === 'Data source must be active to trigger sync') {
+                    return res.status(400).json({
+                        error: {
+                            code: 'SOURCE_NOT_ACTIVE',
+                            message: error.message,
+                            timestamp: new Date(),
+                            correlationId: req.correlationId
+                        }
+                    });
+                }
+            }
             next(error);
         }
     }
@@ -299,21 +331,8 @@ sourcesRoutes.get('/:sourceId/health',
         try {
             const { sourceId } = req.params;
 
-            // Check if source exists
-            const source = await getDataSourceById(sourceId!);
-            if (!source) {
-                return res.status(404).json({
-                    error: {
-                        code: 'SOURCE_NOT_FOUND',
-                        message: 'Data source not found',
-                        timestamp: new Date(),
-                        correlationId: req.correlationId
-                    }
-                });
-            }
-
-            // TODO: Implement actual health check
-            const healthStatus = await checkDataSourceHealth(sourceId!);
+            // Check health status
+            const healthStatus = await dataSourceManager.checkHealth(sourceId!);
 
             res.status(200).json({
                 sourceId,
@@ -325,82 +344,69 @@ sourcesRoutes.get('/:sourceId/health',
             });
 
         } catch (error) {
+            if (error instanceof Error && error.message === 'Data source not found') {
+                return res.status(404).json({
+                    error: {
+                        code: 'SOURCE_NOT_FOUND',
+                        message: 'Data source not found',
+                        timestamp: new Date(),
+                        correlationId: req.correlationId
+                    }
+                });
+            }
             next(error);
         }
     }
 );
 
 /**
- * Mock functions - TODO: Replace with actual implementations
+ * Validate data source configuration
+ * POST /sources/validate
  */
+sourcesRoutes.post('/validate',
+    requireRole('user') as any,
+    validateContentType(['application/json']),
+    validateWithJoi(commonSchemas.dataSourceRequest, 'body'),
+    async (req: any, res: Response, next: NextFunction): Promise<any> => {
+        try {
+            const { name, type, config } = req.body;
 
-async function getDataSources(page: number, limit: number, _sort?: string, _sortBy?: string) {
-    // Simulate database query
-    await new Promise(resolve => setTimeout(resolve, 100));
+            // Validate type-specific configuration
+            const configModel = new DataSourceConfigModel(config, type);
 
-    return {
-        sources: [],
-        pagination: {
-            page,
-            limit,
-            total: 0,
-            totalPages: 0
+            // Create temporary data source model for validation
+            const tempSource = new DataSourceModel({
+                name,
+                type,
+                config: configModel.config,
+                status: 'inactive'
+            });
+
+            // Validate connection without saving
+            const isValid = await dataSourceManager.validateSourceConnection(tempSource);
+
+            res.status(200).json({
+                valid: isValid,
+                message: isValid ? 'Data source configuration is valid' : 'Data source configuration validation failed',
+                validatedConfig: {
+                    name: tempSource.name,
+                    type: tempSource.type,
+                    config: tempSource.config
+                },
+                metadata: {
+                    timestamp: new Date(),
+                    correlationId: req.correlationId,
+                    validatedBy: req.userId
+                }
+            });
+
+        } catch (error) {
+            if (handleValidationError(error, req, res)) {
+                return;
+            }
+            next(error);
         }
-    };
-}
+    }
+);
 
-async function createDataSource(dataSource: DataSourceModel): Promise<DataSourceModel> {
-    // Simulate database save and connection validation
-    await new Promise(resolve => setTimeout(resolve, 200));
 
-    // Return the source with active status if validation passes
-    return dataSource.updateStatus('active');
-}
-
-async function getDataSourceById(_sourceId: string): Promise<DataSourceModel | null> {
-    // Simulate database lookup
-    await new Promise(resolve => setTimeout(resolve, 50));
-
-    // For demo purposes, return null (not found)
-    return null;
-}
-
-async function updateDataSource(_sourceId: string, dataSource: DataSourceModel): Promise<DataSourceModel> {
-    // Simulate database update
-    await new Promise(resolve => setTimeout(resolve, 150));
-
-    return dataSource.updateStatus('active');
-}
-
-async function deleteDataSource(_sourceId: string): Promise<boolean> {
-    // Simulate database deletion
-    await new Promise(resolve => setTimeout(resolve, 100));
-
-    return true;
-}
-
-async function triggerSync(_sourceId: string): Promise<{ syncId: string; estimatedDuration: number }> {
-    // Simulate sync trigger
-    await new Promise(resolve => setTimeout(resolve, 50));
-
-    return {
-        syncId: uuidv4(),
-        estimatedDuration: 300 // 5 minutes
-    };
-}
-
-async function checkDataSourceHealth(_sourceId: string) {
-    // Simulate health check
-    await new Promise(resolve => setTimeout(resolve, 100));
-
-    return {
-        status: 'healthy',
-        lastCheck: new Date(),
-        responseTime: 45,
-        details: {
-            connection: 'active',
-            lastSync: new Date(Date.now() - 3600000), // 1 hour ago
-            documentCount: 1250
-        }
-    };
-}

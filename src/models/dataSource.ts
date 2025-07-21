@@ -131,10 +131,10 @@ const apiDataSourceConfigSchema = baseDataSourceConfigSchema.keys({
     }).optional(),
     pagination: Joi.object({
         type: Joi.string().valid('offset', 'cursor', 'page').required(),
-        limitParam: Joi.string().optional().default('limit'),
-        offsetParam: Joi.string().optional().default('offset'),
-        cursorParam: Joi.string().optional().default('cursor'),
-        pageParam: Joi.string().optional().default('page')
+        limitParam: Joi.string().optional(),
+        offsetParam: Joi.string().optional(),
+        cursorParam: Joi.string().optional(),
+        pageParam: Joi.string().optional()
     }).optional()
 });
 
@@ -145,7 +145,7 @@ const dataSourceSchema = Joi.object({
     id: Joi.string().uuid().required(),
     name: Joi.string().required().min(1).max(100).trim(),
     type: Joi.string().valid('file', 'database', 'api').required(),
-    config: dataSourceConfigSchema.required(),
+    config: Joi.object().required(), // Use generic object validation - specific validation is handled by DataSourceConfigModel
     status: Joi.string().valid('active', 'inactive', 'error', 'syncing').required(),
     lastSync: Joi.date().required(),
     documentCount: Joi.number().integer().min(0).required(),

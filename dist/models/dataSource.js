@@ -51,10 +51,10 @@ const apiDataSourceConfigSchema = baseDataSourceConfigSchema.keys({
     }).optional(),
     pagination: joi_1.default.object({
         type: joi_1.default.string().valid('offset', 'cursor', 'page').required(),
-        limitParam: joi_1.default.string().optional().default('limit'),
-        offsetParam: joi_1.default.string().optional().default('offset'),
-        cursorParam: joi_1.default.string().optional().default('cursor'),
-        pageParam: joi_1.default.string().optional().default('page')
+        limitParam: joi_1.default.string().optional(),
+        offsetParam: joi_1.default.string().optional(),
+        cursorParam: joi_1.default.string().optional(),
+        pageParam: joi_1.default.string().optional()
     }).optional()
 });
 const dataSourceConfigSchema = baseDataSourceConfigSchema;
@@ -62,7 +62,7 @@ const dataSourceSchema = joi_1.default.object({
     id: joi_1.default.string().uuid().required(),
     name: joi_1.default.string().required().min(1).max(100).trim(),
     type: joi_1.default.string().valid('file', 'database', 'api').required(),
-    config: dataSourceConfigSchema.required(),
+    config: joi_1.default.object().required(),
     status: joi_1.default.string().valid('active', 'inactive', 'error', 'syncing').required(),
     lastSync: joi_1.default.date().required(),
     documentCount: joi_1.default.number().integer().min(0).required(),

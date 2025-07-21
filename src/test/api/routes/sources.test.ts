@@ -25,8 +25,8 @@ describe('Sources Routes', () => {
             expect(response.body.sources).toBeInstanceOf(Array);
             expect(response.body.pagination).toHaveProperty('page', 1);
             expect(response.body.pagination).toHaveProperty('limit', 20);
-            expect(response.body.pagination).toHaveProperty('total', 0);
-            expect(response.body.pagination).toHaveProperty('totalPages', 0);
+            expect(response.body.pagination).toHaveProperty('total');
+            expect(response.body.pagination).toHaveProperty('totalPages');
 
             expect(response.body.metadata).toHaveProperty('timestamp');
             expect(response.body.metadata).toHaveProperty('correlationId');
@@ -247,6 +247,37 @@ describe('Sources Routes', () => {
 
     describe('GET /api/v1/sources/:sourceId', () => {
         const validUuid = '123e4567-e89b-12d3-a456-426614174000';
+        let createdSourceId: string;
+
+        beforeAll(async () => {
+            // Create a test source for retrieval tests
+            const sourceData = {
+                name: 'Test Retrieval Source',
+                type: 'file',
+                config: {
+                    filePath: '/test/path'
+                }
+            };
+
+            const createResponse = await request(app)
+                .post('/api/v1/sources')
+                .send(sourceData)
+                .expect(201);
+
+            createdSourceId = createResponse.body.source.id;
+        });
+
+        it('should return source details for existing source', async () => {
+            const response = await request(app)
+                .get(`/api/v1/sources/${createdSourceId}`)
+                .expect(200);
+
+            expect(response.body).toHaveProperty('source');
+            expect(response.body).toHaveProperty('metadata');
+            expect(response.body.source).toHaveProperty('id', createdSourceId);
+            expect(response.body.source).toHaveProperty('name', 'Test Retrieval Source');
+            expect(response.body.source).toHaveProperty('type', 'file');
+        });
 
         it('should return 404 for non-existent source', async () => {
             const response = await request(app)
@@ -270,6 +301,48 @@ describe('Sources Routes', () => {
 
     describe('PUT /api/v1/sources/:sourceId', () => {
         const validUuid = '123e4567-e89b-12d3-a456-426614174000';
+        let createdSourceId: string;
+
+        beforeAll(async () => {
+            // Create a test source for update tests
+            const sourceData = {
+                name: 'Test Update Source',
+                type: 'file',
+                config: {
+                    filePath: '/test/update'
+                }
+            };
+
+            const createResponse = await request(app)
+                .post('/api/v1/sources')
+                .send(sourceData)
+                .expect(201);
+
+            createdSourceId = createResponse.body.source.id;
+        });
+
+        it('should update existing source', async () => {
+            const updateData = {
+                name: 'Updated Source Name',
+                type: 'file',
+                config: {
+                    filePath: '/updated/path',
+                    fileTypes: ['pdf', 'txt']
+                }
+            };
+
+            const response = await request(app)
+                .put(`/api/v1/sources/${createdSourceId}`)
+                .send(updateData)
+                .expect(200);
+
+            expect(response.body).toHaveProperty('source');
+            expect(response.body).toHaveProperty('metadata');
+            expect(response.body.source).toHaveProperty('id', createdSourceId);
+            expect(response.body.source).toHaveProperty('name', 'Updated Source Name');
+            expect(response.body.source.config).toHaveProperty('filePath', '/updated/path');
+            expect(response.body.metadata).toHaveProperty('updatedBy', 'dev-user');
+        });
 
         it('should return 404 for non-existent source update', async () => {
             const updateData = {
@@ -291,7 +364,7 @@ describe('Sources Routes', () => {
         it('should validate UUID format for update', async () => {
             const response = await request(app)
                 .put('/api/v1/sources/invalid-uuid')
-                .send({ name: 'Test', type: 'file', config: {} })
+                .send({ name: 'Test', type: 'file', config: { filePath: '/test' } })
                 .expect(400);
 
             expect(response.body.error).toHaveProperty('code', 'VALIDATION_ERROR');
@@ -319,6 +392,41 @@ describe('Sources Routes', () => {
 
     describe('DELETE /api/v1/sources/:sourceId', () => {
         const validUuid = '123e4567-e89b-12d3-a456-426614174000';
+        let createdSourceId: string;
+
+        beforeAll(async () => {
+            // Create a test source for deletion tests
+            const sourceData = {
+                name: 'Test Delete Source',
+                type: 'file',
+                config: {
+                    filePath: '/test/delete'
+                }
+            };
+
+            const createResponse = await request(app)
+                .post('/api/v1/sources')
+                .send(sourceData)
+                .expect(201);
+
+            createdSourceId = createResponse.body.source.id;
+        });
+
+        it('should delete existing source', async () => {
+            const response = await request(app)
+                .delete(`/api/v1/sources/${createdSourceId}`)
+                .expect(200);
+
+            expect(response.body).toHaveProperty('message', 'Data source deleted successfully');
+            expect(response.body).toHaveProperty('sourceId', createdSourceId);
+            expect(response.body).toHaveProperty('metadata');
+            expect(response.body.metadata).toHaveProperty('deletedBy', 'dev-user');
+
+            // Verify source is actually deleted
+            await request(app)
+                .get(`/api/v1/sources/${createdSourceId}`)
+                .expect(404);
+        });
 
         it('should return 404 for non-existent source deletion', async () => {
             const response = await request(app)
@@ -339,6 +447,40 @@ describe('Sources Routes', () => {
 
     describe('POST /api/v1/sources/:sourceId/sync', () => {
         const validUuid = '123e4567-e89b-12d3-a456-426614174000';
+        let createdSourceId: string;
+
+        beforeAll(async () => {
+            // Create a test source for sync tests
+            const sourceData = {
+                name: 'Test Sync Source',
+                type: 'file',
+                config: {
+                    filePath: '/test/sync'
+                }
+            };
+
+            const createResponse = await request(app)
+                .post('/api/v1/sources')
+                .send(sourceData)
+                .expect(201);
+
+            createdSourceId = createResponse.body.source.id;
+        });
+
+        it('should trigger sync for active source', async () => {
+            const response = await request(app)
+                .post(`/api/v1/sources/${createdSourceId}/sync`)
+                .expect(200);
+
+            expect(response.body).toHaveProperty('message', 'Sync triggered successfully');
+            expect(response.body).toHaveProperty('sourceId', createdSourceId);
+            expect(response.body).toHaveProperty('syncId');
+            expect(response.body).toHaveProperty('estimatedDuration');
+            expect(response.body).toHaveProperty('status');
+            expect(response.body).toHaveProperty('metadata');
+
+            expect(response.body.metadata).toHaveProperty('triggeredBy', 'dev-user');
+        });
 
         it('should return 404 for non-existent source sync', async () => {
             const response = await request(app)
@@ -359,6 +501,40 @@ describe('Sources Routes', () => {
 
     describe('GET /api/v1/sources/:sourceId/health', () => {
         const validUuid = '123e4567-e89b-12d3-a456-426614174000';
+        let createdSourceId: string;
+
+        beforeAll(async () => {
+            // Create a test source for health check tests
+            const sourceData = {
+                name: 'Test Health Source',
+                type: 'file',
+                config: {
+                    filePath: '/test/health'
+                }
+            };
+
+            const createResponse = await request(app)
+                .post('/api/v1/sources')
+                .send(sourceData)
+                .expect(201);
+
+            createdSourceId = createResponse.body.source.id;
+        });
+
+        it('should return health status for existing source', async () => {
+            const response = await request(app)
+                .get(`/api/v1/sources/${createdSourceId}/health`)
+                .expect(200);
+
+            expect(response.body).toHaveProperty('sourceId', createdSourceId);
+            expect(response.body).toHaveProperty('health');
+            expect(response.body).toHaveProperty('metadata');
+
+            expect(response.body.health).toHaveProperty('sourceId', createdSourceId);
+            expect(response.body.health).toHaveProperty('isHealthy');
+            expect(response.body.health).toHaveProperty('lastCheck');
+            expect(response.body.health).toHaveProperty('errorCount');
+        });
 
         it('should return 404 for non-existent source health check', async () => {
             const response = await request(app)
@@ -374,6 +550,132 @@ describe('Sources Routes', () => {
                 .expect(400);
 
             expect(response.body.error).toHaveProperty('code', 'VALIDATION_ERROR');
+        });
+    });
+
+    describe('POST /api/v1/sources/validate', () => {
+        it('should validate file data source configuration', async () => {
+            const sourceData = {
+                name: 'Test Validation Source',
+                type: 'file',
+                config: {
+                    filePath: '/valid/path',
+                    fileTypes: ['pdf', 'txt']
+                }
+            };
+
+            const response = await request(app)
+                .post('/api/v1/sources/validate')
+                .send(sourceData)
+                .expect(200);
+
+            expect(response.body).toHaveProperty('valid', true);
+            expect(response.body).toHaveProperty('message');
+            expect(response.body).toHaveProperty('validatedConfig');
+            expect(response.body).toHaveProperty('metadata');
+
+            expect(response.body.validatedConfig).toHaveProperty('name', sourceData.name);
+            expect(response.body.validatedConfig).toHaveProperty('type', sourceData.type);
+            expect(response.body.validatedConfig).toHaveProperty('config');
+        });
+
+        it('should validate database data source configuration', async () => {
+            const sourceData = {
+                name: 'Test DB Validation',
+                type: 'database',
+                config: {
+                    connectionString: 'postgresql://user:pass@localhost:5432/db',
+                    table: 'documents',
+                    credentials: {
+                        username: 'dbuser',
+                        password: 'dbpass'
+                    }
+                }
+            };
+
+            const response = await request(app)
+                .post('/api/v1/sources/validate')
+                .send(sourceData)
+                .expect(200);
+
+            expect(response.body).toHaveProperty('valid', true);
+            expect(response.body.validatedConfig.type).toBe('database');
+        });
+
+        it('should validate API data source configuration', async () => {
+            const sourceData = {
+                name: 'Test API Validation',
+                type: 'api',
+                config: {
+                    apiEndpoint: 'https://api.example.com/data',
+                    credentials: {
+                        apiKey: 'test-key'
+                    }
+                }
+            };
+
+            const response = await request(app)
+                .post('/api/v1/sources/validate')
+                .send(sourceData)
+                .expect(200);
+
+            expect(response.body).toHaveProperty('valid', true);
+            expect(response.body.validatedConfig.type).toBe('api');
+        });
+
+        it('should reject invalid file configuration', async () => {
+            const sourceData = {
+                name: 'Invalid File Source',
+                type: 'file',
+                config: {
+                    // Missing required filePath
+                    fileTypes: ['pdf']
+                }
+            };
+
+            const response = await request(app)
+                .post('/api/v1/sources/validate')
+                .send(sourceData)
+                .expect(400);
+
+            expect(response.body.error).toHaveProperty('code', 'VALIDATION_ERROR');
+        });
+
+        it('should reject invalid database configuration', async () => {
+            const sourceData = {
+                name: 'Invalid DB Source',
+                type: 'database',
+                config: {
+                    connectionString: 'invalid-format',
+                    // Missing credentials
+                }
+            };
+
+            const response = await request(app)
+                .post('/api/v1/sources/validate')
+                .send(sourceData)
+                .expect(400);
+
+            expect(response.body.error).toHaveProperty('code', 'VALIDATION_ERROR');
+        });
+
+        it('should require authentication for validation', async () => {
+            // Temporarily disable auth skip
+            delete process.env.SKIP_AUTH;
+
+            const response = await request(app)
+                .post('/api/v1/sources/validate')
+                .send({
+                    name: 'Test',
+                    type: 'file',
+                    config: { filePath: '/test' }
+                })
+                .expect(401);
+
+            expect(response.body.error).toHaveProperty('message', 'No authentication token provided');
+
+            // Restore auth skip
+            process.env.SKIP_AUTH = 'true';
         });
     });
 
