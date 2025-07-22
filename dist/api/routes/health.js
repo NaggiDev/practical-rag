@@ -2,28 +2,58 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.healthRoutes = void 0;
 const express_1 = require("express");
+const healthCheck_1 = require("../../services/healthCheck");
 const rateLimit_1 = require("../middleware/rateLimit");
 const validation_1 = require("../middleware/validation");
 exports.healthRoutes = (0, express_1.Router)();
 exports.healthRoutes.use(rateLimit_1.healthRateLimitMiddleware);
+const healthCheckConfig = {
+    checkInterval: 30000,
+    timeoutMs: 5000,
+    retryAttempts: 3,
+    alertThresholds: {
+        responseTime: 5000,
+        errorRate: 0.1,
+        consecutiveFailures: 3,
+        memoryUsage: 0.85,
+        cpuUsage: 0.9,
+        diskUsage: 0.9,
+        cacheHitRate: 0.3,
+        dataSourceFailurePercentage: 0.5
+    }
+};
+let healthCheckService;
+const initializeHealthCheckService = () => {
+    if (!healthCheckService) {
+        const dependencies = {};
+        healthCheckService = new healthCheck_1.HealthCheckService(healthCheckConfig, dependencies);
+        healthCheckService.on('alert', (alert) => {
+            console.warn('Health Check Alert:', alert);
+        });
+        healthCheckService.on('healthCheckError', (error) => {
+            console.error('Health Check Service Error:', error);
+        });
+    }
+    return healthCheckService;
+};
 exports.healthRoutes.get('/', async (_req, res, next) => {
     try {
-        const startTime = Date.now();
-        const uptime = process.uptime();
+        const healthService = initializeHealthCheckService();
+        const systemHealth = await healthService.getSystemHealth();
         const health = {
-            status: 'healthy',
-            timestamp: new Date(),
-            services: [
-                {
-                    name: 'api',
-                    status: 'healthy',
-                    responseTime: Date.now() - startTime,
-                    lastCheck: new Date()
-                }
-            ],
-            uptime
+            status: systemHealth.status,
+            timestamp: systemHealth.timestamp,
+            services: systemHealth.components.map(component => ({
+                name: component.name,
+                status: component.status === 'degraded' ? 'healthy' : component.status,
+                responseTime: component.responseTime,
+                lastCheck: component.lastCheck,
+                details: component.details
+            })),
+            uptime: systemHealth.uptime / 1000
         };
-        res.status(200).json(health);
+        const statusCode = systemHealth.status === 'healthy' ? 200 : 503;
+        res.status(statusCode).json(health);
     }
     catch (error) {
         next(error);
@@ -32,26 +62,32 @@ exports.healthRoutes.get('/', async (_req, res, next) => {
 exports.healthRoutes.get('/detailed', (0, validation_1.validateWithJoi)(validation_1.commonSchemas.healthParams, 'query'), async (req, res, next) => {
     try {
         const startTime = Date.now();
-        const uptime = process.uptime();
         const { includeMetrics } = req.query;
-        const services = await checkAllServices();
-        const hasUnhealthyServices = services.some(service => service.status === 'unhealthy');
-        const overallStatus = hasUnhealthyServices ? 'degraded' : 'healthy';
+        const healthService = initializeHealthCheckService();
+        const systemHealth = await healthService.getSystemHealth();
         const health = {
-            status: overallStatus,
-            timestamp: new Date(),
-            services,
-            uptime
+            status: systemHealth.status,
+            timestamp: systemHealth.timestamp,
+            services: systemHealth.components.map(component => ({
+                name: component.name,
+                status: component.status === 'degraded' ? 'healthy' : component.status,
+                responseTime: component.responseTime,
+                lastCheck: component.lastCheck,
+                details: component.details
+            })),
+            uptime: systemHealth.uptime / 1000
         };
         if (includeMetrics) {
             health.metrics = {
                 memory: process.memoryUsage(),
                 cpu: process.cpuUsage(),
                 responseTime: Date.now() - startTime,
-                activeConnections: process.getActiveResourcesInfo?.()?.length || 0
+                activeConnections: process.getActiveResourcesInfo?.()?.length || 0,
+                version: systemHealth.version,
+                environment: systemHealth.environment
             };
         }
-        const statusCode = overallStatus === 'healthy' ? 200 : 503;
+        const statusCode = systemHealth.status === 'healthy' ? 200 : 503;
         res.status(statusCode).json(health);
     }
     catch (error) {
@@ -93,156 +129,127 @@ exports.healthRoutes.get('/live', async (_req, res, next) => {
         next(error);
     }
 });
-async function checkAllServices() {
-    const services = [];
-    services.push(await checkApiService());
-    services.push(await checkVectorDatabase());
-    services.push(await checkRedisCache());
-    services.push(await checkEmbeddingService());
-    services.push(await checkDataSources());
-    return services;
-}
+exports.healthRoutes.get('/component/:componentName', async (req, res, next) => {
+    try {
+        const { componentName } = req.params;
+        const healthService = initializeHealthCheckService();
+        const componentHealth = await healthService.checkComponent(componentName);
+        const statusCode = componentHealth.status === 'healthy' ? 200 : 503;
+        res.status(statusCode).json({
+            component: componentHealth,
+            timestamp: new Date()
+        });
+    }
+    catch (error) {
+        if (error instanceof Error && error.message.includes('Unknown component')) {
+            res.status(404).json({
+                error: {
+                    code: 'COMPONENT_NOT_FOUND',
+                    message: error.message,
+                    timestamp: new Date(),
+                    correlationId: req.correlationId
+                }
+            });
+        }
+        else {
+            next(error);
+        }
+    }
+});
+exports.healthRoutes.get('/sources', async (_req, res, next) => {
+    try {
+        const healthService = initializeHealthCheckService();
+        const dataSourceHealth = await healthService.getDataSourceHealth();
+        const statusCode = dataSourceHealth.unhealthySources === 0 ? 200 : 503;
+        res.status(statusCode).json(dataSourceHealth);
+    }
+    catch (error) {
+        next(error);
+    }
+});
+exports.healthRoutes.post('/monitoring/start', async (_req, res, next) => {
+    try {
+        const healthService = initializeHealthCheckService();
+        healthService.start();
+        res.status(200).json({
+            message: 'Health monitoring started',
+            interval: healthCheckConfig.checkInterval,
+            timestamp: new Date()
+        });
+    }
+    catch (error) {
+        next(error);
+    }
+});
+exports.healthRoutes.post('/monitoring/stop', async (_req, res, next) => {
+    try {
+        const healthService = initializeHealthCheckService();
+        healthService.stop();
+        res.status(200).json({
+            message: 'Health monitoring stopped',
+            timestamp: new Date()
+        });
+    }
+    catch (error) {
+        next(error);
+    }
+});
+exports.healthRoutes.get('/monitoring/status', async (_req, res, next) => {
+    try {
+        const healthService = initializeHealthCheckService();
+        const lastCheck = healthService.getLastHealthCheck();
+        const failureCounts = healthService.getComponentFailureCounts();
+        res.status(200).json({
+            lastHealthCheck: lastCheck,
+            componentFailureCounts: Object.fromEntries(failureCounts),
+            config: healthCheckConfig,
+            timestamp: new Date()
+        });
+    }
+    catch (error) {
+        next(error);
+    }
+});
+exports.healthRoutes.post('/component/:componentName/reset', async (req, res, next) => {
+    try {
+        const { componentName } = req.params;
+        const healthService = initializeHealthCheckService();
+        healthService.resetComponentFailureCount(componentName);
+        res.status(200).json({
+            message: `Failure count reset for component: ${componentName}`,
+            component: componentName,
+            timestamp: new Date()
+        });
+    }
+    catch (error) {
+        next(error);
+    }
+});
+exports.healthRoutes.get('/trends', async (_req, res, next) => {
+    try {
+        const healthService = initializeHealthCheckService();
+        const trends = await healthService.getPerformanceTrends();
+        res.status(200).json({
+            trends,
+            timestamp: new Date()
+        });
+    }
+    catch (error) {
+        next(error);
+    }
+});
 async function checkCriticalServices() {
-    const services = [];
-    services.push(await checkApiService());
-    services.push(await checkVectorDatabase());
-    services.push(await checkRedisCache());
-    return services;
-}
-async function checkApiService() {
-    const startTime = Date.now();
-    try {
-        const responseTime = Date.now() - startTime;
-        return {
-            name: 'api',
-            status: 'healthy',
-            responseTime,
-            lastCheck: new Date(),
-            details: {
-                version: '1.0.0',
-                environment: process.env.NODE_ENV || 'development'
-            }
-        };
-    }
-    catch (error) {
-        return {
-            name: 'api',
-            status: 'unhealthy',
-            responseTime: Date.now() - startTime,
-            lastCheck: new Date(),
-            details: {
-                error: error instanceof Error ? error.message : 'Unknown error'
-            }
-        };
-    }
-}
-async function checkVectorDatabase() {
-    const startTime = Date.now();
-    try {
-        await new Promise(resolve => setTimeout(resolve, 10));
-        return {
-            name: 'vector_database',
-            status: 'healthy',
-            responseTime: Date.now() - startTime,
-            lastCheck: new Date(),
-            details: {
-                provider: process.env.VECTOR_DB_PROVIDER || 'faiss',
-                connected: true
-            }
-        };
-    }
-    catch (error) {
-        return {
-            name: 'vector_database',
-            status: 'unhealthy',
-            responseTime: Date.now() - startTime,
-            lastCheck: new Date(),
-            details: {
-                error: error instanceof Error ? error.message : 'Connection failed'
-            }
-        };
-    }
-}
-async function checkRedisCache() {
-    const startTime = Date.now();
-    try {
-        await new Promise(resolve => setTimeout(resolve, 5));
-        return {
-            name: 'redis_cache',
-            status: 'healthy',
-            responseTime: Date.now() - startTime,
-            lastCheck: new Date(),
-            details: {
-                connected: true,
-                memory_usage: 'normal'
-            }
-        };
-    }
-    catch (error) {
-        return {
-            name: 'redis_cache',
-            status: 'unhealthy',
-            responseTime: Date.now() - startTime,
-            lastCheck: new Date(),
-            details: {
-                error: error instanceof Error ? error.message : 'Connection failed'
-            }
-        };
-    }
-}
-async function checkEmbeddingService() {
-    const startTime = Date.now();
-    try {
-        await new Promise(resolve => setTimeout(resolve, 15));
-        return {
-            name: 'embedding_service',
-            status: 'healthy',
-            responseTime: Date.now() - startTime,
-            lastCheck: new Date(),
-            details: {
-                provider: process.env.EMBEDDING_PROVIDER || 'openai',
-                model: process.env.EMBEDDING_MODEL || 'text-embedding-ada-002'
-            }
-        };
-    }
-    catch (error) {
-        return {
-            name: 'embedding_service',
-            status: 'unhealthy',
-            responseTime: Date.now() - startTime,
-            lastCheck: new Date(),
-            details: {
-                error: error instanceof Error ? error.message : 'Service unavailable'
-            }
-        };
-    }
-}
-async function checkDataSources() {
-    const startTime = Date.now();
-    try {
-        await new Promise(resolve => setTimeout(resolve, 20));
-        return {
-            name: 'data_sources',
-            status: 'healthy',
-            responseTime: Date.now() - startTime,
-            lastCheck: new Date(),
-            details: {
-                total_sources: 0,
-                active_sources: 0,
-                failed_sources: 0
-            }
-        };
-    }
-    catch (error) {
-        return {
-            name: 'data_sources',
-            status: 'unhealthy',
-            responseTime: Date.now() - startTime,
-            lastCheck: new Date(),
-            details: {
-                error: error instanceof Error ? error.message : 'Sources check failed'
-            }
-        };
-    }
+    const healthService = initializeHealthCheckService();
+    const systemHealth = await healthService.getSystemHealth();
+    const criticalComponents = ['api', 'cache', 'vector_search'];
+    return systemHealth.components
+        .filter(component => criticalComponents.includes(component.name))
+        .map(component => ({
+        name: component.name,
+        status: component.status === 'degraded' ? 'healthy' : component.status,
+        responseTime: component.responseTime,
+        lastCheck: component.lastCheck,
+        details: component.details
+    }));
 }
 //# sourceMappingURL=health.js.map

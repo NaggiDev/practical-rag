@@ -14,6 +14,8 @@
         "test:integration:performance": "jest --testPathPattern=performance.integration.test.ts --verbose",
         "test:integration:load": "jest --testPathPattern=loadTesting.integration.test.ts --verbose",
         "test:integration:failures": "jest --testPathPattern=failureScenarios.integration.test.ts --verbose",
+        "test:performance": "jest --testPathPattern=performanceValidation.test.ts --verbose --testTimeout=600000",
+        "test:performance:run": "ts-node src/scripts/runPerformanceTests.ts",
         "test:all": "npm run test && npm run test:integration",
         "lint": "eslint src/**/*.ts",
         "lint:fix": "eslint src/**/*.ts --fix",

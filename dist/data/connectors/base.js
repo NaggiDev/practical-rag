@@ -93,7 +93,7 @@ class DataSourceConnector {
         const timeout = timeoutMs || this.config.timeout || 30000;
         return new Promise((resolve, reject) => {
             const timer = setTimeout(() => {
-                reject(new errors_1.TimeoutError(`Operation timed out after ${timeout}ms`, this.dataSource.id));
+                reject(new errors_1.TimeoutError(`Operation timed out after ${timeout}ms`, 'data_source_operation', timeout, { dataSourceId: this.dataSource.id }));
             }, timeout);
             operation()
                 .then(result => {
@@ -172,7 +172,7 @@ class DataSourceConnector {
         }
         else if (error instanceof Error) {
             if (error.message.includes('timeout') || error.message.includes('ETIMEDOUT')) {
-                dataSourceError = new errors_1.TimeoutError(error.message, this.dataSource.id);
+                dataSourceError = new errors_1.TimeoutError(error.message, 'connection_timeout', 30000, { dataSourceId: this.dataSource.id });
             }
             else if (error.message.includes('connection') || error.message.includes('ECONNREFUSED')) {
                 dataSourceError = new errors_1.ConnectionError(error.message, this.dataSource.id);

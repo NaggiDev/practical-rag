@@ -320,7 +320,9 @@ export class DatabaseConnector extends DataSourceConnector {
                 } else if (error.message.includes('timeout') || error.message.includes('ETIMEDOUT')) {
                     throw new TimeoutError(
                         `PostgreSQL connection timeout: ${error.message}`,
-                        this.dataSource.id
+                        'postgresql_connection',
+                        30000,
+                        { dataSourceId: this.dataSource.id }
                     );
                 } else {
                     throw new ConnectionError(
@@ -371,7 +373,9 @@ export class DatabaseConnector extends DataSourceConnector {
                 } else if (error.message.includes('timeout') || error.message.includes('ETIMEDOUT')) {
                     throw new TimeoutError(
                         `MongoDB connection timeout: ${error.message}`,
-                        this.dataSource.id
+                        'mongodb_connection',
+                        30000,
+                        { dataSourceId: this.dataSource.id }
                     );
                 } else {
                     throw new ConnectionError(

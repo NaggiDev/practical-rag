@@ -208,7 +208,7 @@ class DatabaseConnector extends base_1.DataSourceConnector {
                     throw new errors_1.AuthenticationError(`PostgreSQL authentication failed: ${error.message}`, this.dataSource.id);
                 }
                 else if (error.message.includes('timeout') || error.message.includes('ETIMEDOUT')) {
-                    throw new errors_1.TimeoutError(`PostgreSQL connection timeout: ${error.message}`, this.dataSource.id);
+                    throw new errors_1.TimeoutError(`PostgreSQL connection timeout: ${error.message}`, 'postgresql_connection', 30000, { dataSourceId: this.dataSource.id });
                 }
                 else {
                     throw new errors_1.ConnectionError(`PostgreSQL connection failed: ${error.message}`, this.dataSource.id);
@@ -243,7 +243,7 @@ class DatabaseConnector extends base_1.DataSourceConnector {
                     throw new errors_1.AuthenticationError(`MongoDB authentication failed: ${error.message}`, this.dataSource.id);
                 }
                 else if (error.message.includes('timeout') || error.message.includes('ETIMEDOUT')) {
-                    throw new errors_1.TimeoutError(`MongoDB connection timeout: ${error.message}`, this.dataSource.id);
+                    throw new errors_1.TimeoutError(`MongoDB connection timeout: ${error.message}`, 'mongodb_connection', 30000, { dataSourceId: this.dataSource.id });
                 }
                 else {
                     throw new errors_1.ConnectionError(`MongoDB connection failed: ${error.message}`, this.dataSource.id);

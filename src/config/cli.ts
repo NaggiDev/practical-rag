@@ -85,7 +85,7 @@ class ConfigCLI {
 
     private async validateConfig(options: CLIOptions): Promise<void> {
         const configPath = options.args[0];
-        const environment = options.flags.env as string;
+        const environment = options.flags.env as 'development' | 'production' | 'test' | undefined;
 
         console.log('Validating configuration...');
 
@@ -122,7 +122,11 @@ class ConfigCLI {
                 this.listTemplates();
                 break;
             case 'show':
-                this.showTemplate(options.args[1]);
+                if (options.args[1]) {
+                    this.showTemplate(options.args[1]);
+                } else {
+                    console.error('Template name is required for show command');
+                }
                 break;
             case 'generate':
                 await this.generateFromTemplate(options);
@@ -183,7 +187,11 @@ class ConfigCLI {
                 await this.listEnvironments();
                 break;
             case 'switch':
-                await this.switchEnvironment(options.args[1]);
+                if (options.args[1]) {
+                    await this.switchEnvironment(options.args[1]);
+                } else {
+                    console.error('Environment name is required for switch command');
+                }
                 break;
             case 'create':
                 await this.createEnvironment(options);
@@ -251,7 +259,7 @@ class ConfigCLI {
 
     private async exportConfig(options: CLIOptions): Promise<void> {
         const outputPath = options.args[0] || './config.export.json';
-        const environment = options.flags.env as string;
+        const environment = options.flags.env as 'development' | 'production' | 'test' | undefined;
 
         await this.configManager.loadConfig({ environment });
         const exportPath = await this.configManager.exportConfig(outputPath);
@@ -261,7 +269,7 @@ class ConfigCLI {
 
     private async importConfig(options: CLIOptions): Promise<void> {
         const inputPath = options.args[0];
-        const environment = options.flags.env as string;
+        const environment = options.flags.env as 'development' | 'production' | 'test' | undefined;
 
         if (!inputPath) {
             console.error('Input file path required');
@@ -273,7 +281,7 @@ class ConfigCLI {
     }
 
     private async watchConfig(options: CLIOptions): Promise<void> {
-        const environment = options.flags.env as string;
+        const environment = options.flags.env as 'development' | 'production' | 'test' | undefined;
         const configPath = options.args[0];
 
         console.log('Starting configuration watcher...');
@@ -302,7 +310,7 @@ class ConfigCLI {
     }
 
     private async showSummary(options: CLIOptions): Promise<void> {
-        const environment = options.flags.env as string;
+        const environment = options.flags.env as 'development' | 'production' | 'test' | undefined;
 
         await this.configManager.loadConfig({ environment });
         const summary = this.configManager.getConfigSummary();
@@ -372,13 +380,15 @@ function parseArgs(args: string[]): CLIOptions {
     for (const arg of rest) {
         if (arg.startsWith('--')) {
             const [key, value] = arg.slice(2).split('=');
-            flags[key] = value || true;
+            if (key) {
+                flags[key] = value || true;
+            }
         } else {
             cleanArgs.push(arg);
         }
     }
 
-    return { command, args: cleanArgs, flags };
+    return { command: command || '', args: cleanArgs, flags };
 }
 
 // Main execution
@@ -393,3 +403,4 @@ if (require.main === module) {
 }
 
 export { ConfigCLI };
+

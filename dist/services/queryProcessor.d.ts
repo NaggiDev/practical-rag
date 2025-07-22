@@ -3,10 +3,6 @@ import { CacheManager } from './cache';
 import { DataSourceManager } from './dataSourceManager';
 import { EmbeddingService } from './embedding';
 import { SearchResult, VectorDatabase } from './vectorSearch';
-export declare class ProcessingError extends Error {
-    readonly code: string;
-    constructor(message: string, code: string);
-}
 export interface QueryProcessorConfig {
     maxConcurrentQueries: number;
     defaultTimeout: number;
@@ -37,6 +33,8 @@ export declare class QueryProcessor {
     private activeQueries;
     constructor(config: QueryProcessorConfig, cacheManager: CacheManager, vectorDatabase: VectorDatabase, embeddingService: EmbeddingService, dataSourceManager: DataSourceManager);
     processQuery(query: string | Query, context?: object): Promise<QueryResult>;
+    private withTimeout;
+    private _processQueryInternal;
     parseQuery(queryText: string): Promise<ParsedQuery>;
     private preprocessQuery;
     private extractEntities;

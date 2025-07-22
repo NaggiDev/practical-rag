@@ -211,7 +211,9 @@ export abstract class DataSourceConnector {
             const timer = setTimeout(() => {
                 reject(new TimeoutError(
                     `Operation timed out after ${timeout}ms`,
-                    this.dataSource.id
+                    'data_source_operation',
+                    timeout,
+                    { dataSourceId: this.dataSource.id }
                 ));
             }, timeout);
 
@@ -357,7 +359,7 @@ export abstract class DataSourceConnector {
         } else if (error instanceof Error) {
             // Map common error types to DataSourceError
             if (error.message.includes('timeout') || error.message.includes('ETIMEDOUT')) {
-                dataSourceError = new TimeoutError(error.message, this.dataSource.id);
+                dataSourceError = new TimeoutError(error.message, 'connection_timeout', 30000, { dataSourceId: this.dataSource.id });
             } else if (error.message.includes('connection') || error.message.includes('ECONNREFUSED')) {
                 dataSourceError = new ConnectionError(error.message, this.dataSource.id);
             } else {

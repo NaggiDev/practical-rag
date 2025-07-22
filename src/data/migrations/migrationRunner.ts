@@ -51,25 +51,38 @@ export class MigrationRunner {
         const db = await this.getMetadataDb();
         const all = promisify(db.all.bind(db));
 
-        const rows = await all('SELECT id FROM migrations ORDER BY executed_at');
+        const rows = await all('SELECT id FROM migrations ORDER BY executed_at') as any[];
         return rows.map((row: any) => row.id);
     }
 
     private async recordMigration(migrationId: string, name: string): Promise<void> {
         const db = await this.getMetadataDb();
-        const run = promisify(db.run.bind(db));
 
-        await run(
-            'INSERT INTO migrations (id, name) VALUES (?, ?)',
-            [migrationId, name]
-        );
+        return new Promise((resolve, reject) => {
+            db.run(
+                'INSERT INTO migrations (id, name) VALUES (?, ?)',
+                [migrationId, name],
+                function (err) {
+                    if (err) reject(err);
+                    else resolve();
+                }
+            );
+        });
     }
 
     private async removeMigrationRecord(migrationId: string): Promise<void> {
         const db = await this.getMetadataDb();
-        const run = promisify(db.run.bind(db));
 
-        await run('DELETE FROM migrations WHERE id = ?', [migrationId]);
+        return new Promise((resolve, reject) => {
+            db.run(
+                'DELETE FROM migrations WHERE id = ?',
+                [migrationId],
+                function (err) {
+                    if (err) reject(err);
+                    else resolve();
+                }
+            );
+        });
     }
 
     async runMigrations(migrations: Migration[]): Promise<void> {
@@ -87,7 +100,10 @@ export class MigrationRunner {
                     await this.recordMigration(migration.id, migration.name);
                     logger.info(`Migration completed: ${migration.name}`);
                 } catch (error) {
-                    logger.error(`Migration failed: ${migration.name}`, error);
+                    logger.error(`Migration failed: ${migration.name}`, {
+                        error: error instanceof Error ? error.message : String(error),
+                        migrationId: migration.id
+                    });
                     throw error;
                 }
             } else {
@@ -106,7 +122,10 @@ export class MigrationRunner {
             await this.removeMigrationRecord(migration.id);
             logger.info(`Migration rollback completed: ${migration.name}`);
         } catch (error) {
-            logger.error(`Migration rollback failed: ${migration.name}`, error);
+            logger.error(`Migration rollback failed: ${migration.name}`, {
+                error: error instanceof Error ? error.message : String(error),
+                migrationId: migration.id
+            });
             throw error;
         }
     }

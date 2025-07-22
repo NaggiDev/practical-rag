@@ -253,7 +253,7 @@ export class APIConnector extends DataSourceConnector {
         } catch (error) {
             if (axios.isAxiosError(error)) {
                 if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
-                    throw new TimeoutError(`Request timeout: ${error.message}`, this.dataSource.id);
+                    throw new TimeoutError(`Request timeout: ${error.message}`, 'api_request', 30000, { dataSourceId: this.dataSource.id });
                 } else if (error.response?.status === 401 || error.response?.status === 403) {
                     throw new DataSourceError(
                         `Authentication failed: ${error.response.statusText}`,

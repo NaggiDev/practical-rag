@@ -1,18 +1,11 @@
 import crypto from 'crypto';
 import { ParsedQuery, Query, QueryFilter, QueryModel, QueryResult, QueryResultModel } from '../models/query';
-import { ValidationError } from '../utils/errors';
+import { LogContext, ProcessingError, TimeoutError, ValidationError } from '../utils/errors';
+import { logger } from '../utils/logger';
 import { CacheManager } from './cache';
 import { DataSourceManager } from './dataSourceManager';
 import { EmbeddingService } from './embedding';
 import { SearchOptions, SearchResult, VectorDatabase } from './vectorSearch';
-
-// Use ProcessingError from utils/errors
-export class ProcessingError extends BaseProcessingError {
-    constructor(message: string, code: string, context?: LogContext) {
-        super(message, 'processing', undefined, context);
-        this.name = 'ProcessingError';
-    }
-}
 
 export interface QueryProcessorConfig {
     maxConcurrentQueries: number;
@@ -173,7 +166,7 @@ export class QueryProcessor {
                         });
 
                         // Collect diagnostic info for cached queries
-                        logger.collectDiagnosticInfo('process_query', processingTime, true, {
+                        logger.info('Query served from cache - performance metrics', {
                             ...logContext,
                             cached: true
                         });
@@ -225,7 +218,7 @@ export class QueryProcessor {
                 });
 
                 // Collect diagnostic info for successful queries
-                logger.collectDiagnosticInfo('process_query', processingTime, true, {
+                logger.info('Query processing completed - performance metrics', {
                     ...logContext,
                     confidence: result.confidence,
                     sourcesCount: result.sources.length
@@ -255,7 +248,11 @@ export class QueryProcessor {
             });
 
             // Collect diagnostic info for failed queries
-            logger.collectDiagnosticInfo('process_query', processingTime, false, errorContext, errorContext.errorCode);
+            logger.error('Query processing failed - performance metrics', {
+                ...errorContext,
+                processingTime,
+                success: false
+            });
 
             // Create error result
             const errorResult = new QueryResultModel({
@@ -545,9 +542,11 @@ export class QueryProcessor {
                     failedSources
                 });
 
-                // Collect diagnostic info
-                logger.collectDiagnosticInfo('orchestrate_search', processingTime, failedSources === 0, {
+                // Log performance metrics
+                logger.info('Parallel search orchestration completed - performance metrics', {
                     ...logContext,
+                    processingTime,
+                    success: failedSources === 0,
                     totalResults: allResults.length,
                     successfulSources,
                     failedSources
@@ -598,9 +597,11 @@ export class QueryProcessor {
                     failedSources
                 });
 
-                // Collect diagnostic info
-                logger.collectDiagnosticInfo('orchestrate_search', processingTime, failedSources === 0, {
+                // Log performance metrics
+                logger.info('Sequential search orchestration completed - performance metrics', {
                     ...logContext,
+                    processingTime,
+                    success: failedSources === 0,
                     totalResults: allResults.length,
                     successfulSources,
                     failedSources
@@ -617,8 +618,13 @@ export class QueryProcessor {
                 stackTrace: error instanceof Error ? error.stack : undefined
             });
 
-            // Collect diagnostic info for failed orchestration
-            logger.collectDiagnosticInfo('orchestrate_search', processingTime, false, logContext, 'ORCHESTRATION_FAILED');
+            // Log performance metrics for failed orchestration
+            logger.error('Search orchestration failed - performance metrics', {
+                ...logContext,
+                processingTime,
+                success: false,
+                errorCode: 'ORCHESTRATION_FAILED'
+            });
 
             throw error;
         }

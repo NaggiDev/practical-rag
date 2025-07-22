@@ -35,10 +35,12 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.configManager = exports.EnhancedConfigManager = void 0;
 const fs = __importStar(require("fs"));
+const path = __importStar(require("path"));
 const config_1 = require("../models/config");
 const dataSource_1 = require("../models/dataSource");
 const defaults_1 = require("./defaults");
 const env_1 = require("./env");
+const envValidator_1 = require("./envValidator");
 const file_1 = require("./file");
 const validation_1 = require("./validation");
 class EnhancedConfigManager {
@@ -46,6 +48,9 @@ class EnhancedConfigManager {
         this.config = null;
         this.watchForChanges = false;
         this.changeListeners = [];
+        this.environment = 'development';
+        this.configDir = './config';
+        this.lastModified = 0;
     }
     static getInstance() {
         if (!EnhancedConfigManager.instance) {
@@ -55,17 +60,24 @@ class EnhancedConfigManager {
     }
     async loadConfig(options = {}) {
         try {
-            this.configPath = options.configPath;
+            this.environment = options.environment || process.env.NODE_ENV || 'development';
+            this.configDir = options.configDir || './config';
             this.watchForChanges = options.watchForChanges || false;
-            const rawConfig = this.configPath
-                ? await (0, file_1.loadFromFile)(this.configPath)
-                : (0, env_1.loadFromEnv)();
+            this.configPath = options.configPath || this.getEnvironmentConfigPath();
+            const rawConfig = await this.loadEnvironmentConfig();
+            const envValidation = envValidator_1.envValidator.validateEnvironment();
+            if (!envValidation.valid) {
+                console.warn('Environment validation warnings:', envValidation.warnings);
+                if (envValidation.errors.length > 0) {
+                    throw new Error(`Environment validation failed: ${envValidation.errors.join(', ')}`);
+                }
+            }
             const mergedConfig = this.mergeWithDefaults(rawConfig);
             const validatedConfig = options.validateOnLoad !== false
                 ? (0, validation_1.validateConfig)(mergedConfig)
                 : mergedConfig;
             this.config = new config_1.SystemConfigModel(validatedConfig);
-            if (this.watchForChanges && this.configPath) {
+            if (this.watchForChanges) {
                 this.setupFileWatcher();
             }
             return this.config.toJSON();
@@ -221,20 +233,108 @@ class EnhancedConfigManager {
             dataSources: config.dataSources || defaults_1.defaultConfig.dataSources
         };
     }
+    getEnvironmentConfigPath() {
+        const baseConfigPath = path.join(this.configDir, 'config.json');
+        const envConfigPath = path.join(this.configDir, `config.${this.environment}.json`);
+        if (fs.existsSync(envConfigPath)) {
+            return envConfigPath;
+        }
+        return baseConfigPath;
+    }
+    async loadEnvironmentConfig() {
+        let config = {};
+        const baseConfigPath = path.join(this.configDir, 'config.json');
+        if (fs.existsSync(baseConfigPath)) {
+            try {
+                config = await (0, file_1.loadFromFile)(baseConfigPath);
+            }
+            catch (error) {
+                console.warn(`Failed to load base configuration from ${baseConfigPath}:`, error);
+            }
+        }
+        const envConfigPath = path.join(this.configDir, `config.${this.environment}.json`);
+        if (fs.existsSync(envConfigPath)) {
+            try {
+                const envConfig = await (0, file_1.loadFromFile)(envConfigPath);
+                config = this.deepMerge(config, envConfig);
+            }
+            catch (error) {
+                console.warn(`Failed to load environment configuration from ${envConfigPath}:`, error);
+            }
+        }
+        if (this.configPath && this.configPath !== this.getEnvironmentConfigPath()) {
+            try {
+                const specificConfig = await (0, file_1.loadFromFile)(this.configPath);
+                config = this.deepMerge(config, specificConfig);
+            }
+            catch (error) {
+                console.warn(`Failed to load specific configuration from ${this.configPath}:`, error);
+            }
+        }
+        const envConfig = (0, env_1.loadFromEnv)();
+        config = this.deepMerge(config, envConfig);
+        return config;
+    }
+    deepMerge(target, source) {
+        const result = { ...target };
+        for (const key in source) {
+            if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
+                result[key] = this.deepMerge(result[key] || {}, source[key]);
+            }
+            else {
+                result[key] = source[key];
+            }
+        }
+        return result;
+    }
+    async checkFileModified() {
+        if (!this.configPath || !fs.existsSync(this.configPath)) {
+            return false;
+        }
+        try {
+            const stats = await fs.promises.stat(this.configPath);
+            const currentModified = stats.mtime.getTime();
+            if (currentModified > this.lastModified) {
+                this.lastModified = currentModified;
+                return true;
+            }
+            return false;
+        }
+        catch (error) {
+            console.warn('Failed to check file modification time:', error);
+            return false;
+        }
+    }
     setupFileWatcher() {
-        if (!this.configPath)
+        const watchPaths = [
+            this.configPath,
+            path.join(this.configDir, 'config.json'),
+            path.join(this.configDir, `config.${this.environment}.json`)
+        ].filter((p) => p !== undefined && fs.existsSync(p));
+        if (watchPaths.length === 0)
             return;
         try {
-            this.fileWatcher = fs.watch(this.configPath, async (eventType) => {
-                if (eventType === 'change') {
-                    try {
-                        await this.reloadConfig();
+            for (const watchPath of watchPaths) {
+                const watcher = fs.watch(watchPath, async (eventType) => {
+                    if (eventType === 'change') {
+                        setTimeout(async () => {
+                            try {
+                                const hasChanged = await this.checkFileModified();
+                                if (hasChanged) {
+                                    console.log(`Configuration file changed: ${watchPath}`);
+                                    await this.reloadConfig();
+                                }
+                            }
+                            catch (error) {
+                                console.error('Failed to reload configuration:', error);
+                            }
+                        }, 100);
                     }
-                    catch (error) {
-                        console.error('Failed to reload configuration:', error);
-                    }
+                });
+                if (!this.fileWatcher) {
+                    this.fileWatcher = watcher;
                 }
-            });
+            }
         }
         catch (error) {
             console.warn('Failed to set up file watcher:', error);
@@ -255,6 +355,80 @@ class EnhancedConfigManager {
             this.fileWatcher.close();
             this.fileWatcher = undefined;
         }
+    }
+    async createEnvironmentConfig(environment, config) {
+        const envConfigPath = path.join(this.configDir, `config.${environment}.json`);
+        await fs.promises.mkdir(this.configDir, { recursive: true });
+        try {
+            const configData = JSON.stringify(config, null, 2);
+            await fs.promises.writeFile(envConfigPath, configData, 'utf8');
+        }
+        catch (error) {
+            throw new Error(`Failed to create environment configuration for ${environment}: ${error}`);
+        }
+    }
+    async getAvailableEnvironments() {
+        try {
+            if (!fs.existsSync(this.configDir)) {
+                return [];
+            }
+            const files = await fs.promises.readdir(this.configDir);
+            const environments = files
+                .filter(file => file.startsWith('config.') && file.endsWith('.json'))
+                .map(file => file.replace('config.', '').replace('.json', ''))
+                .filter(env => env !== 'json');
+            return environments;
+        }
+        catch (error) {
+            console.warn('Failed to get available environments:', error);
+            return [];
+        }
+    }
+    getCurrentEnvironment() {
+        return this.environment;
+    }
+    async switchEnvironment(environment) {
+        this.environment = environment;
+        return this.reloadConfig({
+            environment: environment,
+            watchForChanges: this.watchForChanges
+        });
+    }
+    async exportConfig(filePath) {
+        if (!this.config) {
+            throw new Error('Configuration not loaded. Call loadConfig() first.');
+        }
+        const exportPath = filePath || path.join(this.configDir, `config.${this.environment}.export.json`);
+        const configData = JSON.stringify(this.config.toJSON(), null, 2);
+        await fs.promises.writeFile(exportPath, configData, 'utf8');
+        return exportPath;
+    }
+    async importConfig(filePath, environment) {
+        try {
+            const importedConfig = await (0, file_1.loadFromFile)(filePath);
+            if (environment) {
+                await this.createEnvironmentConfig(environment, importedConfig);
+                return this.switchEnvironment(environment);
+            }
+            else {
+                this.config = new config_1.SystemConfigModel(importedConfig);
+                this.notifyChangeListeners(this.config.toJSON());
+                return this.config.toJSON();
+            }
+        }
+        catch (error) {
+            throw new Error(`Failed to import configuration from ${filePath}: ${error}`);
+        }
+    }
+    getConfigSummary() {
+        return {
+            environment: this.environment,
+            configPath: this.configPath,
+            watchForChanges: this.watchForChanges,
+            lastModified: this.lastModified ? new Date(this.lastModified) : null,
+            dataSources: this.config?.dataSources.length || 0,
+            validationStatus: this.config ? 'valid' : 'unknown'
+        };
     }
     destroy() {
         this.cleanup();

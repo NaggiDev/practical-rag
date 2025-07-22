@@ -132,7 +132,6 @@ export class HealthCheckService extends EventEmitter {
     }
 
     public async checkComponent(componentName: string): Promise<ComponentHealth> {
-        const startTime = Date.now();
 
         switch (componentName) {
             case 'cache':

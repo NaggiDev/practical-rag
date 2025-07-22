@@ -3,18 +3,11 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.QueryProcessor = exports.ProcessingError = void 0;
+exports.QueryProcessor = void 0;
 const crypto_1 = __importDefault(require("crypto"));
 const query_1 = require("../models/query");
 const errors_1 = require("../utils/errors");
-class ProcessingError extends Error {
-    constructor(message, code) {
-        super(message);
-        this.name = 'ProcessingError';
-        this.code = code;
-    }
-}
-exports.ProcessingError = ProcessingError;
+const logger_1 = require("../utils/logger");
 class QueryProcessor {
     constructor(config, cacheManager, vectorDatabase, embeddingService, dataSourceManager) {
         this.activeQueries = new Map();
@@ -33,10 +26,30 @@ class QueryProcessor {
         this.vectorDatabase = vectorDatabase;
         this.embeddingService = embeddingService;
         this.dataSourceManager = dataSourceManager;
+        logger_1.logger.info('QueryProcessor initialized', {
+            operation: 'query_processor_init',
+            config: this.config
+        });
     }
     async processQuery(query, context) {
+        return this.withTimeout(this._processQueryInternal(query, context), this.config.defaultTimeout, 'process_query');
+    }
+    async withTimeout(promise, timeoutMs, operation) {
+        const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => {
+                logger_1.logger.warn('Operation timed out', {
+                    operation,
+                    timeoutMs
+                });
+                reject(new errors_1.TimeoutError(`Operation ${operation} timed out after ${timeoutMs}ms`, operation, timeoutMs));
+            }, timeoutMs);
+        });
+        return Promise.race([promise, timeoutPromise]);
+    }
+    async _processQueryInternal(query, context) {
         const startTime = Date.now();
         let queryModel;
+        let queryId;
         try {
             if (typeof query === 'string') {
                 queryModel = new query_1.QueryModel({
@@ -47,8 +60,21 @@ class QueryProcessor {
             else {
                 queryModel = query instanceof query_1.QueryModel ? query : new query_1.QueryModel(query);
             }
+            queryId = queryModel.id;
+            const logContext = {
+                operation: 'process_query',
+                queryId,
+                queryText: queryModel.text.substring(0, 100),
+                userId: queryModel.userId
+            };
+            logger_1.logger.info('Starting query processing', logContext);
             if (this.activeQueries.size >= this.config.maxConcurrentQueries) {
-                throw new ProcessingError('Query processing capacity exceeded. Please try again later.', 'CAPACITY_EXCEEDED');
+                logger_1.logger.warn('Query processing capacity exceeded', {
+                    ...logContext,
+                    activeQueries: this.activeQueries.size,
+                    maxConcurrentQueries: this.config.maxConcurrentQueries
+                });
+                throw new errors_1.ProcessingError('Query processing capacity exceeded. Please try again later.', 'CAPACITY_EXCEEDED', logContext);
             }
             const searchContext = {
                 queryId: queryModel.id,
@@ -60,22 +86,54 @@ class QueryProcessor {
             this.activeQueries.set(queryModel.id, searchContext);
             try {
                 if (this.config.cacheEnabled) {
+                    logger_1.logger.debug('Checking cache for query', logContext);
                     const cachedResult = await this.getCachedResult(queryModel);
                     if (cachedResult) {
                         searchContext.cached = true;
+                        const processingTime = Date.now() - startTime;
+                        logger_1.logger.info('Query served from cache', {
+                            ...logContext,
+                            processingTime,
+                            cached: true
+                        });
+                        logger_1.logger.info('Query served from cache - performance metrics', {
+                            ...logContext,
+                            cached: true
+                        });
                         return new query_1.QueryResultModel({
                             ...cachedResult,
                             cached: true
                         });
                     }
+                    logger_1.logger.debug('No cached result found', logContext);
                 }
+                logger_1.logger.debug('Parsing query', logContext);
                 const parsedQuery = await this.parseQuery(queryModel.text);
+                logger_1.logger.debug('Optimizing query', { ...logContext, parsedQuery });
                 const optimizedQuery = await this.optimizeQuery(parsedQuery, queryModel.context);
+                logger_1.logger.debug('Starting search orchestration', { ...logContext, optimizedQuery });
                 const searchResults = await this.orchestrateSearch(optimizedQuery, queryModel);
+                logger_1.logger.debug('Generating query result', {
+                    ...logContext,
+                    searchResultsCount: searchResults.length
+                });
                 const result = await this.generateQueryResult(queryModel, searchResults, startTime, searchContext.cached);
                 if (this.config.cacheEnabled && !searchContext.cached) {
+                    logger_1.logger.debug('Caching query result', logContext);
                     await this.cacheResult(queryModel, result);
                 }
+                const processingTime = Date.now() - startTime;
+                logger_1.logger.info('Query processing completed successfully', {
+                    ...logContext,
+                    processingTime,
+                    confidence: result.confidence,
+                    sourcesCount: result.sources.length
+                });
+                logger_1.logger.info('Query processing completed - performance metrics', {
+                    ...logContext,
+                    confidence: result.confidence,
+                    sourcesCount: result.sources.length
+                });
                 return result;
             }
             finally {
@@ -84,6 +142,23 @@ class QueryProcessor {
         }
         catch (error) {
             const processingTime = Date.now() - startTime;
+            const errorContext = {
+                operation: 'process_query',
+                queryId: queryId || 'unknown',
+                processingTime,
+                errorCode: error instanceof errors_1.ProcessingError ? error.code : 'UNKNOWN_ERROR',
+                errorCategory: 'processing'
+            };
+            logger_1.logger.error('Query processing failed', {
+                ...errorContext,
+                error: error instanceof Error ? error.message : 'Unknown error',
+                stackTrace: error instanceof Error ? error.stack : undefined
+            });
+            logger_1.logger.error('Query processing failed - performance metrics', {
+                ...errorContext,
+                processingTime,
+                success: false
+            });
             const errorResult = new query_1.QueryResultModel({
                 response: 'I apologize, but I encountered an error while processing your query. Please try again.',
                 sources: [],
@@ -91,19 +166,25 @@ class QueryProcessor {
                 processingTime,
                 cached: false
             });
-            console.error('Query processing error:', {
-                queryId: queryModel?.id || 'unknown',
-                error: error instanceof Error ? error.message : 'Unknown error',
-                processingTime
-            });
             return errorResult;
         }
     }
     async parseQuery(queryText) {
+        const logContext = {
+            operation: 'parse_query',
+            queryLength: queryText?.length || 0
+        };
+        logger_1.logger.debug('Starting query parsing', logContext);
         if (!queryText || queryText.trim().length === 0) {
-            throw new errors_1.ValidationError('Query text cannot be empty');
+            logger_1.logger.warn('Empty query text provided', logContext);
+            throw new errors_1.ValidationError('Query text cannot be empty', 'queryText', queryText);
         }
         const processedText = this.preprocessQuery(queryText);
+        logger_1.logger.debug('Query preprocessing completed', {
+            ...logContext,
+            originalLength: queryText.length,
+            processedLength: processedText.length
+        });
         const entities = this.extractEntities(queryText);
         const intent = this.classifyIntent(processedText);
         const filters = this.extractFilters(queryText);
@@ -237,38 +318,136 @@ class QueryProcessor {
         return [...new Set(synonyms)];
     }
     async orchestrateSearch(optimizedQuery, queryModel) {
+        const startTime = Date.now();
+        const logContext = {
+            operation: 'orchestrate_search',
+            queryId: queryModel.id,
+            parallelSearch: this.config.enableParallelSearch
+        };
+        logger_1.logger.debug('Starting search orchestration', logContext);
         const searchTasks = [];
-        const queryEmbedding = await this.embeddingService.generateEmbedding(queryModel.text);
-        const dataSources = await this.dataSourceManager.getActiveSources();
-        if (this.config.enableParallelSearch) {
-            dataSources.forEach(source => {
-                const searchTask = this.searchDataSource(source.id, queryEmbedding.embedding, optimizedQuery, queryModel);
-                searchTasks.push(searchTask);
+        try {
+            const queryEmbedding = await this.embeddingService.generateEmbedding(queryModel.text);
+            logger_1.logger.debug('Query embedding generated', {
+                ...logContext,
+                embeddingDimension: queryEmbedding.embedding.length
             });
-            const results = await Promise.allSettled(searchTasks);
-            const allResults = [];
-            results.forEach((result, index) => {
-                if (result.status === 'fulfilled') {
-                    allResults.push(...result.value);
-                }
-                else {
-                    console.error(`Search failed for source ${dataSources[index]?.id}:`, result.reason);
-                }
+            const dataSources = await this.dataSourceManager.getActiveSources();
+            logger_1.logger.info('Retrieved active data sources', {
+                ...logContext,
+                dataSourceCount: dataSources.length,
+                dataSources: dataSources.map(ds => ({ id: ds.id, type: ds.type }))
             });
-            return this.rankAndFilterResults(allResults, optimizedQuery);
-        }
-        else {
-            const allResults = [];
-            for (const source of dataSources) {
-                try {
-                    const results = await this.searchDataSource(source.id, queryEmbedding.embedding, optimizedQuery, queryModel);
-                    allResults.push(...results);
-                }
-                catch (error) {
-                    console.error(`Search failed for source ${source.id}:`, error);
-                }
+            if (this.config.enableParallelSearch) {
+                logger_1.logger.debug('Executing parallel search across data sources', logContext);
+                dataSources.forEach(source => {
+                    const searchTask = this.searchDataSource(source.id, queryEmbedding.embedding, optimizedQuery, queryModel);
+                    searchTasks.push(searchTask);
+                });
+                const results = await Promise.allSettled(searchTasks);
+                const allResults = [];
+                let successfulSources = 0;
+                let failedSources = 0;
+                results.forEach((result, index) => {
+                    const sourceId = dataSources[index]?.id;
+                    if (result.status === 'fulfilled') {
+                        allResults.push(...result.value);
+                        successfulSources++;
+                        logger_1.logger.debug('Search completed for source', {
+                            ...logContext,
+                            sourceId,
+                            resultCount: result.value.length
+                        });
+                    }
+                    else {
+                        failedSources++;
+                        logger_1.logger.error('Search failed for source', {
+                            ...logContext,
+                            sourceId,
+                            error: result.reason instanceof Error ? result.reason.message : 'Unknown error',
+                            stackTrace: result.reason instanceof Error ? result.reason.stack : undefined
+                        });
+                    }
+                });
+                const processingTime = Date.now() - startTime;
+                logger_1.logger.info('Parallel search orchestration completed', {
+                    ...logContext,
+                    processingTime,
+                    totalResults: allResults.length,
+                    successfulSources,
+                    failedSources
+                });
+                logger_1.logger.info('Parallel search orchestration completed - performance metrics', {
+                    ...logContext,
+                    processingTime,
+                    success: failedSources === 0,
+                    totalResults: allResults.length,
+                    successfulSources,
+                    failedSources
+                });
+                return this.rankAndFilterResults(allResults, optimizedQuery);
             }
-            return this.rankAndFilterResults(allResults, optimizedQuery);
+            else {
+                logger_1.logger.debug('Executing sequential search across data sources', logContext);
+                const allResults = [];
+                let successfulSources = 0;
+                let failedSources = 0;
+                for (const source of dataSources) {
+                    try {
+                        logger_1.logger.debug('Searching data source', { ...logContext, sourceId: source.id });
+                        const results = await this.searchDataSource(source.id, queryEmbedding.embedding, optimizedQuery, queryModel);
+                        allResults.push(...results);
+                        successfulSources++;
+                        logger_1.logger.debug('Search completed for source', {
+                            ...logContext,
+                            sourceId: source.id,
+                            resultCount: results.length
+                        });
+                    }
+                    catch (error) {
+                        failedSources++;
+                        logger_1.logger.error('Search failed for source', {
+                            ...logContext,
+                            sourceId: source.id,
+                            error: error instanceof Error ? error.message : 'Unknown error',
+                            stackTrace: error instanceof Error ? error.stack : undefined
+                        });
+                    }
+                }
+                const processingTime = Date.now() - startTime;
+                logger_1.logger.info('Sequential search orchestration completed', {
+                    ...logContext,
+                    processingTime,
+                    totalResults: allResults.length,
+                    successfulSources,
+                    failedSources
+                });
+                logger_1.logger.info('Sequential search orchestration completed - performance metrics', {
+                    ...logContext,
+                    processingTime,
+                    success: failedSources === 0,
+                    totalResults: allResults.length,
+                    successfulSources,
+                    failedSources
+                });
+                return this.rankAndFilterResults(allResults, optimizedQuery);
+            }
+        }
+        catch (error) {
+            const processingTime = Date.now() - startTime;
+            logger_1.logger.error('Search orchestration failed', {
+                ...logContext,
+                processingTime,
+                error: error instanceof Error ? error.message : 'Unknown error',
+                stackTrace: error instanceof Error ? error.stack : undefined
+            });
+            logger_1.logger.error('Search orchestration failed - performance metrics', {
+                ...logContext,
+                processingTime,
+                success: false,
+                errorCode: 'ORCHESTRATION_FAILED'
+            });
+            throw error;
         }
     }
     async searchDataSource(sourceId, queryEmbedding, optimizedQuery, queryModel) {

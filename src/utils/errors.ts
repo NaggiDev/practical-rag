@@ -1,5 +1,8 @@
 import { LogContext, logger } from './logger';
 
+// Re-export LogContext for convenience
+export { LogContext };
+
 // Error categories for structured logging and tracking
 export enum ErrorCategory {
     DATA_SOURCE = 'data_source',
@@ -352,5 +355,21 @@ export class ErrorHandler {
                 details: baseError.context
             }
         };
+    }
+}
+export class ProcessingError extends BaseError {
+    public override readonly code: string;
+
+    constructor(
+        message: string,
+        code: string,
+        context: LogContext = {}
+    ) {
+        super(message, 'PROCESSING_ERROR', ErrorCategory.PROCESSING, true, {
+            ...context,
+            code,
+            errorType: 'processing_failure'
+        });
+        this.code = code;
     }
 }

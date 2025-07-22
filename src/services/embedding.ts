@@ -128,7 +128,7 @@ export class EmbeddingService {
         } catch (error) {
             if (error instanceof Error) {
                 if (error.message.includes('timeout')) {
-                    throw new TimeoutError(`Embedding generation timed out for text: ${text.substring(0, 100)}...`);
+                    throw new TimeoutError(`Embedding generation timed out for text: ${text.substring(0, 100)}...`, 'embedding_generation', 30000);
                 }
                 if (error.message.includes('rate limit')) {
                     throw new RateLimitError(`Rate limit exceeded for embedding generation`);
