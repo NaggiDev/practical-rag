@@ -1,0 +1,81 @@
+Performance Testing Data for Fast RAG System
+
+This file contains sample content specifically designed for performance testing scenarios.
+
+Query Processing Performance:
+The system is designed to handle typical queries within 2 seconds and cached queries within 500ms. Performance testing should verify these requirements under various load conditions.
+
+Concurrent Query Handling:
+The system must maintain performance when handling multiple simultaneous queries. Load testing scenarios should include:
+- Light load: 5 concurrent users
+- Medium load: 15 concurrent users  
+- Heavy load: 30 concurrent users
+- Stress load: 50+ concurrent users
+
+Memory Management:
+Proper memory management is crucial for sustained performance. The system should:
+- Maintain stable memory usage under load
+- Implement efficient garbage collection
+- Use connection pooling for external resources
+- Cache frequently accessed data appropriately
+
+Response Time Requirements:
+- Typical queries: < 2000ms
+- Cached queries: < 500ms
+- Complex queries: < 3000ms
+- Health checks: < 100ms
+
+Throughput Expectations:
+- Minimum 10 queries per second sustained
+- Burst handling up to 50 concurrent queries
+- 95% success rate under normal load
+- 90% success rate under heavy load
+
+Resource Utilization:
+- Memory increase < 100MB during load tests
+- CPU utilization should remain reasonable
+- Network connections properly managed
+- File handles properly closed
+
+Cache Performance:
+- Cache hit rate > 50% for repeated queries
+- Cache warming for popular queries
+- Proper cache invalidation on data updates
+- Memory-efficient cache storage
+
+Error Handling:
+- Graceful degradation when sources fail
+- Proper error reporting and logging
+- Circuit breaker patterns for failing sources
+- Recovery mechanisms for temporary failures
+
+Monitoring and Metrics:
+- Response time percentiles (p50, p95, p99)
+- Query success and failure rates
+- Cache hit rates and effectiveness
+- Data source health and availability
+- System resource utilization
+
+Load Testing Scenarios:
+1. Sustained load over extended periods
+2. Burst traffic followed by normal load
+3. Mixed query types and complexities
+4. Concurrent access to cached data
+5. Memory pressure testing
+6. Network failure simulation
+7. Data source failure scenarios
+
+Performance Benchmarks:
+- Baseline performance with single user
+- Scalability with increasing concurrent users
+- Performance with varying data source counts
+- Cache effectiveness under different patterns
+- Recovery time after system stress
+
+Quality Assurance:
+- Response quality maintained under load
+- Source attribution accuracy preserved
+- Confidence scores remain meaningful
+- Error messages remain informative
+
+This content provides comprehensive test data for validating system performance under various conditions and load patterns.

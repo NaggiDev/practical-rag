@@ -180,6 +180,7 @@ export class ConfigWatcher extends EventEmitter {
     private watchDirectory(dirPath: string, targetFilePath: string): void {
         try {
             const watcher = fs.watch(dirPath, (eventType, filename) => {
+                if (!filename) return;
                 const fullPath = path.join(dirPath, filename);
 
                 if (fullPath === targetFilePath && eventType === 'rename' && fs.existsSync(fullPath)) {

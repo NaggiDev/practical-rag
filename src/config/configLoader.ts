@@ -24,7 +24,7 @@ export class ConfigLoader {
     private environment: string;
     private configFileName: string;
     private watchForChanges: boolean;
-    private validateOnLoad: boolean;
+
     private mergeWithEnv: boolean;
     private configWatcher: ConfigWatcher | null = null;
     private loadedConfig: SystemConfig | null = null;
@@ -35,7 +35,7 @@ export class ConfigLoader {
         this.environment = options.environment || process.env.NODE_ENV || 'development';
         this.configFileName = options.configFileName || 'config';
         this.watchForChanges = options.watchForChanges !== undefined ? options.watchForChanges : false;
-        this.validateOnLoad = options.validateOnLoad !== undefined ? options.validateOnLoad : true;
+        // Validation is handled by the config models themselves
         this.mergeWithEnv = options.mergeWithEnv !== undefined ? options.mergeWithEnv : true;
     }
 
@@ -216,7 +216,7 @@ export class ConfigLoader {
         config = { ...defaultConfig };
 
         // Load base config if it exists
-        if (fs.existsSync(configPaths[0])) {
+        if (configPaths[0] && fs.existsSync(configPaths[0])) {
             try {
                 const baseConfig = await loadFromFile(configPaths[0]);
                 config = this.deepMerge(config, baseConfig);
@@ -226,7 +226,7 @@ export class ConfigLoader {
         }
 
         // Load environment-specific config if it exists
-        if (configPaths.length > 1 && fs.existsSync(configPaths[1])) {
+        if (configPaths.length > 1 && configPaths[1] && fs.existsSync(configPaths[1])) {
             try {
                 const envConfig = await loadFromFile(configPaths[1]);
                 config = this.deepMerge(config, envConfig);

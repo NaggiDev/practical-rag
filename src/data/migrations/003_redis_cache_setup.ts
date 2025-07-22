@@ -1,9 +1,18 @@
 import Redis from 'ioredis';
 import { SystemConfig } from '../../models/config';
 import { logger } from '../../utils/logger';
-import { Migration } from './migrationRunner';
 
-export const redisCacheSetupMigration: Migration = {
+interface Migration {
+    id: string;
+    name: string;
+    up(config: SystemConfig): Promise<void>;
+    down(config: SystemConfig): Promise<void>;
+}
+
+export const redisCacheSetupMigration: Migration & {
+    configureRedisSettings(redis: Redis, config: SystemConfig): Promise<void>;
+    setupCacheNamespaces(redis: Redis): Promise<void>;
+} = {
     id: '003',
     name: 'Redis Cache Setup',
 
@@ -11,11 +20,10 @@ export const redisCacheSetupMigration: Migration = {
         logger.info('Setting up Redis cache configuration');
 
         const redis = new Redis({
-            host: config.cache.redis.host,
-            port: config.cache.redis.port,
-            db: config.cache.redis.db,
-            password: config.cache.redis.password,
-            retryDelayOnFailover: 100,
+            host: config.cache?.redis?.host || 'localhost',
+            port: config.cache?.redis?.port || 6379,
+            db: config.cache?.redis?.db || 0,
+            password: config.cache?.redis?.password,
             maxRetriesPerRequest: 3,
             lazyConnect: true
         });
@@ -33,7 +41,7 @@ export const redisCacheSetupMigration: Migration = {
 
             logger.info('Redis cache setup completed successfully');
         } catch (error) {
-            logger.error('Failed to setup Redis cache', error);
+            logger.error('Failed to setup Redis cache', error as Error);
             throw error;
         } finally {
             await redis.disconnect();
@@ -48,7 +56,6 @@ export const redisCacheSetupMigration: Migration = {
             port: config.cache.redis.port,
             db: config.cache.redis.db,
             password: config.cache.redis.password,
-            retryDelayOnFailover: 100,
             maxRetriesPerRequest: 3,
             lazyConnect: true
         });
@@ -61,7 +68,7 @@ export const redisCacheSetupMigration: Migration = {
 
             logger.info('Redis cache cleanup completed');
         } catch (error) {
-            logger.warn('Failed to cleanup Redis cache', error);
+            logger.warn('Failed to cleanup Redis cache', error as Error);
         } finally {
             await redis.disconnect();
         }
@@ -88,7 +95,7 @@ export const redisCacheSetupMigration: Migration = {
             logger.info('Redis keyspace notifications enabled');
 
         } catch (error) {
-            logger.warn('Some Redis configuration settings could not be applied', error);
+            logger.warn('Some Redis configuration settings could not be applied', error as Error);
         }
     },
 

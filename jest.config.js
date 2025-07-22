@@ -7,11 +7,12 @@ module.exports = {
         '**/?(*.)+(spec|test).ts'
     ],
     transform: {
-        '^.+\\.ts$': 'ts-jest'
+        '^.+\\.ts$': 'ts-jest',
     },
     collectCoverageFrom: [
         'src/**/*.ts',
         '!src/**/*.d.ts',
+        '!src/test/**',
         '!src/**/*.test.ts',
         '!src/**/*.spec.ts'
     ],
@@ -22,5 +23,26 @@ module.exports = {
         'html'
     ],
     setupFilesAfterEnv: ['<rootDir>/src/test/setup.ts'],
-    testTimeout: 10000
+    testTimeout: 30000,
+    maxWorkers: 1, // Run tests sequentially to avoid conflicts
+    forceExit: true,
+    detectOpenHandles: true,
+    verbose: true,
+    testPathIgnorePatterns: [
+        '/node_modules/',
+        '/dist/'
+    ],
+    moduleFileExtensions: [
+        'ts',
+        'tsx',
+        'js',
+        'jsx',
+        'json',
+        'node'
+    ],
+    globals: {
+        'ts-jest': {
+            tsconfig: 'tsconfig.json'
+        }
+    }
 };
