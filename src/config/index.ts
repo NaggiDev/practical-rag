@@ -3,6 +3,9 @@ import { loadFromEnv } from './env';
 import { loadFromFile } from './file';
 import { validateConfig } from './validation';
 
+/**
+ * @deprecated Use ConfigService instead
+ */
 export class ConfigManager {
     private static instance: ConfigManager;
     private config: SystemConfig | null = null;
@@ -55,10 +58,15 @@ export class ConfigManager {
     }
 }
 
+// Export all configuration modules
+export * from './configLoader';
 export * from './configManager';
+export * from './configService';
+export * from './configWatcher';
 export * from './defaults';
 export * from './env';
 export * from './envValidator';
 export * from './file';
+export * from './templates';
 export * from './validation';
 
