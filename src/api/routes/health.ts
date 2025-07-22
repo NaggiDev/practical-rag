@@ -1,5 +1,6 @@
 import { NextFunction, Response, Router } from 'express';
 import { HealthResponse, ServiceHealth } from '../../models/response';
+import { HealthCheckConfig, HealthCheckService } from '../../services/healthCheck';
 import { healthRateLimitMiddleware } from '../middleware/rateLimit';
 import { commonSchemas, validateWithJoi } from '../middleware/validation';
 
@@ -8,31 +9,78 @@ export const healthRoutes = Router();
 // Apply rate limiting to health endpoints
 healthRoutes.use(healthRateLimitMiddleware);
 
+// Initialize health check service (in production, this would be dependency injected)
+const healthCheckConfig: HealthCheckConfig = {
+    checkInterval: 30000, // 30 seconds
+    timeoutMs: 5000,
+    retryAttempts: 3,
+    alertThresholds: {
+        responseTime: 5000, // 5 seconds
+        errorRate: 0.1, // 10%
+        consecutiveFailures: 3,
+        memoryUsage: 0.85, // 85% memory usage
+        cpuUsage: 0.9, // 90% CPU usage
+        diskUsage: 0.9, // 90% disk usage
+        cacheHitRate: 0.3, // 30% minimum hit rate
+        dataSourceFailurePercentage: 0.5 // 50% of data sources can fail before system is unhealthy
+    }
+};
+
+// These would be injected in a real application
+let healthCheckService: HealthCheckService;
+
+// Initialize health check service with dependencies
+const initializeHealthCheckService = () => {
+    if (!healthCheckService) {
+        // In production, these dependencies would be properly injected
+        const dependencies = {
+            // cacheManager: new CacheManager(cacheConfig),
+            // dataSourceManager: new DataSourceManagerImpl(),
+            // monitoringService: new MonitoringService(),
+            // embeddingService: new EmbeddingService(embeddingConfig),
+            // vectorSearchEngine: new VectorSearchEngine(vectorConfig)
+        };
+
+        healthCheckService = new HealthCheckService(healthCheckConfig, dependencies);
+
+        // Set up alert handling
+        healthCheckService.on('alert', (alert) => {
+            console.warn('Health Check Alert:', alert);
+            // In production, this would integrate with alerting systems
+        });
+
+        healthCheckService.on('healthCheckError', (error) => {
+            console.error('Health Check Service Error:', error);
+        });
+    }
+    return healthCheckService;
+};
+
 /**
  * Basic health check endpoint
  * GET /health
  */
 healthRoutes.get('/', async (_req: any, res: Response, next: NextFunction) => {
     try {
-        const startTime = Date.now();
-        const uptime = process.uptime();
+        const healthService = initializeHealthCheckService();
+        const systemHealth = await healthService.getSystemHealth();
 
-        // Basic health check
+        // Convert to expected response format
         const health: HealthResponse = {
-            status: 'healthy',
-            timestamp: new Date(),
-            services: [
-                {
-                    name: 'api',
-                    status: 'healthy',
-                    responseTime: Date.now() - startTime,
-                    lastCheck: new Date()
-                }
-            ],
-            uptime
+            status: systemHealth.status,
+            timestamp: systemHealth.timestamp,
+            services: systemHealth.components.map(component => ({
+                name: component.name,
+                status: component.status === 'degraded' ? 'healthy' : component.status,
+                responseTime: component.responseTime,
+                lastCheck: component.lastCheck,
+                details: component.details
+            })),
+            uptime: systemHealth.uptime / 1000 // Convert to seconds
         };
 
-        res.status(200).json(health);
+        const statusCode = systemHealth.status === 'healthy' ? 200 : 503;
+        res.status(statusCode).json(health);
     } catch (error) {
         next(error);
     }
@@ -47,21 +95,23 @@ healthRoutes.get('/detailed',
     async (req: any, res: Response, next: NextFunction) => {
         try {
             const startTime = Date.now();
-            const uptime = process.uptime();
             const { includeMetrics } = req.query as any;
+            const healthService = initializeHealthCheckService();
 
-            // Check all system components
-            const services = await checkAllServices();
+            const systemHealth = await healthService.getSystemHealth();
 
-            // Determine overall system status
-            const hasUnhealthyServices = services.some(service => service.status === 'unhealthy');
-            const overallStatus = hasUnhealthyServices ? 'degraded' : 'healthy';
-
+            // Convert to expected response format
             const health: HealthResponse = {
-                status: overallStatus,
-                timestamp: new Date(),
-                services,
-                uptime
+                status: systemHealth.status,
+                timestamp: systemHealth.timestamp,
+                services: systemHealth.components.map(component => ({
+                    name: component.name,
+                    status: component.status === 'degraded' ? 'healthy' : component.status,
+                    responseTime: component.responseTime,
+                    lastCheck: component.lastCheck,
+                    details: component.details
+                })),
+                uptime: systemHealth.uptime / 1000 // Convert to seconds
             };
 
             // Add metrics if requested
@@ -70,11 +120,13 @@ healthRoutes.get('/detailed',
                     memory: process.memoryUsage(),
                     cpu: process.cpuUsage(),
                     responseTime: Date.now() - startTime,
-                    activeConnections: (process as any).getActiveResourcesInfo?.()?.length || 0
+                    activeConnections: (process as any).getActiveResourcesInfo?.()?.length || 0,
+                    version: systemHealth.version,
+                    environment: systemHealth.environment
                 };
             }
 
-            const statusCode = overallStatus === 'healthy' ? 200 : 503;
+            const statusCode = systemHealth.status === 'healthy' ? 200 : 503;
             res.status(statusCode).json(health);
         } catch (error) {
             next(error);
@@ -128,207 +180,169 @@ healthRoutes.get('/live', async (_req: any, res: Response, next: NextFunction) =
 });
 
 /**
- * Check all system services
+ * Component-specific health check endpoint
+ * GET /health/component/:componentName
  */
-async function checkAllServices(): Promise<ServiceHealth[]> {
-    const services: ServiceHealth[] = [];
+healthRoutes.get('/component/:componentName', async (req: any, res: Response, next: NextFunction) => {
+    try {
+        const { componentName } = req.params;
+        const healthService = initializeHealthCheckService();
 
-    // Check API service
-    services.push(await checkApiService());
+        const componentHealth = await healthService.checkComponent(componentName);
 
-    // Check database connections
-    services.push(await checkVectorDatabase());
-    services.push(await checkRedisCache());
+        const statusCode = componentHealth.status === 'healthy' ? 200 : 503;
+        res.status(statusCode).json({
+            component: componentHealth,
+            timestamp: new Date()
+        });
+    } catch (error) {
+        if (error instanceof Error && error.message.includes('Unknown component')) {
+            res.status(404).json({
+                error: {
+                    code: 'COMPONENT_NOT_FOUND',
+                    message: error.message,
+                    timestamp: new Date(),
+                    correlationId: (req as any).correlationId
+                }
+            });
+        } else {
+            next(error);
+        }
+    }
+});
 
-    // Check external services
-    services.push(await checkEmbeddingService());
+/**
+ * Data sources health summary endpoint
+ * GET /health/sources
+ */
+healthRoutes.get('/sources', async (_req: any, res: Response, next: NextFunction) => {
+    try {
+        const healthService = initializeHealthCheckService();
+        const dataSourceHealth = await healthService.getDataSourceHealth();
 
-    // Check data sources (sample check)
-    services.push(await checkDataSources());
+        const statusCode = dataSourceHealth.unhealthySources === 0 ? 200 : 503;
+        res.status(statusCode).json(dataSourceHealth);
+    } catch (error) {
+        next(error);
+    }
+});
 
-    return services;
-}
+/**
+ * Start continuous health monitoring
+ * POST /health/monitoring/start
+ */
+healthRoutes.post('/monitoring/start', async (_req: any, res: Response, next: NextFunction) => {
+    try {
+        const healthService = initializeHealthCheckService();
+        healthService.start();
+
+        res.status(200).json({
+            message: 'Health monitoring started',
+            interval: healthCheckConfig.checkInterval,
+            timestamp: new Date()
+        });
+    } catch (error) {
+        next(error);
+    }
+});
+
+/**
+ * Stop continuous health monitoring
+ * POST /health/monitoring/stop
+ */
+healthRoutes.post('/monitoring/stop', async (_req: any, res: Response, next: NextFunction) => {
+    try {
+        const healthService = initializeHealthCheckService();
+        healthService.stop();
+
+        res.status(200).json({
+            message: 'Health monitoring stopped',
+            timestamp: new Date()
+        });
+    } catch (error) {
+        next(error);
+    }
+});
+
+/**
+ * Get health monitoring status
+ * GET /health/monitoring/status
+ */
+healthRoutes.get('/monitoring/status', async (_req: any, res: Response, next: NextFunction) => {
+    try {
+        const healthService = initializeHealthCheckService();
+        const lastCheck = healthService.getLastHealthCheck();
+        const failureCounts = healthService.getComponentFailureCounts();
+
+        res.status(200).json({
+            lastHealthCheck: lastCheck,
+            componentFailureCounts: Object.fromEntries(failureCounts),
+            config: healthCheckConfig,
+            timestamp: new Date()
+        });
+    } catch (error) {
+        next(error);
+    }
+});
+
+/**
+ * Reset component failure count
+ * POST /health/component/:componentName/reset
+ */
+healthRoutes.post('/component/:componentName/reset', async (req: any, res: Response, next: NextFunction) => {
+    try {
+        const { componentName } = req.params;
+        const healthService = initializeHealthCheckService();
+
+        healthService.resetComponentFailureCount(componentName);
+
+        res.status(200).json({
+            message: `Failure count reset for component: ${componentName}`,
+            component: componentName,
+            timestamp: new Date()
+        });
+    } catch (error) {
+        next(error);
+    }
+});
+
+/**
+ * Get performance trends
+ * GET /health/trends
+ */
+healthRoutes.get('/trends', async (_req: any, res: Response, next: NextFunction) => {
+    try {
+        const healthService = initializeHealthCheckService();
+
+        // This method needs to be added to the HealthCheckService
+        const trends = await healthService.getPerformanceTrends();
+
+        res.status(200).json({
+            trends,
+            timestamp: new Date()
+        });
+    } catch (error) {
+        next(error);
+    }
+});
 
 /**
  * Check critical services for readiness
  */
 async function checkCriticalServices(): Promise<ServiceHealth[]> {
-    const services: ServiceHealth[] = [];
+    const healthService = initializeHealthCheckService();
+    const systemHealth = await healthService.getSystemHealth();
 
-    // Only check services that are critical for basic functionality
-    services.push(await checkApiService());
-    services.push(await checkVectorDatabase());
-    services.push(await checkRedisCache());
+    // Filter to only critical components
+    const criticalComponents = ['api', 'cache', 'vector_search'];
 
-    return services;
-}
-
-/**
- * Check API service health
- */
-async function checkApiService(): Promise<ServiceHealth> {
-    const startTime = Date.now();
-
-    try {
-        // Basic API health check
-        const responseTime = Date.now() - startTime;
-
-        return {
-            name: 'api',
-            status: 'healthy',
-            responseTime,
-            lastCheck: new Date(),
-            details: {
-                version: '1.0.0',
-                environment: process.env.NODE_ENV || 'development'
-            }
-        };
-    } catch (error) {
-        return {
-            name: 'api',
-            status: 'unhealthy',
-            responseTime: Date.now() - startTime,
-            lastCheck: new Date(),
-            details: {
-                error: error instanceof Error ? error.message : 'Unknown error'
-            }
-        };
-    }
-}
-
-/**
- * Check vector database health
- */
-async function checkVectorDatabase(): Promise<ServiceHealth> {
-    const startTime = Date.now();
-
-    try {
-        // TODO: Implement actual vector database health check
-        // For now, simulate a health check
-        await new Promise(resolve => setTimeout(resolve, 10));
-
-        return {
-            name: 'vector_database',
-            status: 'healthy',
-            responseTime: Date.now() - startTime,
-            lastCheck: new Date(),
-            details: {
-                provider: process.env.VECTOR_DB_PROVIDER || 'faiss',
-                connected: true
-            }
-        };
-    } catch (error) {
-        return {
-            name: 'vector_database',
-            status: 'unhealthy',
-            responseTime: Date.now() - startTime,
-            lastCheck: new Date(),
-            details: {
-                error: error instanceof Error ? error.message : 'Connection failed'
-            }
-        };
-    }
-}
-
-/**
- * Check Redis cache health
- */
-async function checkRedisCache(): Promise<ServiceHealth> {
-    const startTime = Date.now();
-
-    try {
-        // TODO: Implement actual Redis health check
-        // For now, simulate a health check
-        await new Promise(resolve => setTimeout(resolve, 5));
-
-        return {
-            name: 'redis_cache',
-            status: 'healthy',
-            responseTime: Date.now() - startTime,
-            lastCheck: new Date(),
-            details: {
-                connected: true,
-                memory_usage: 'normal'
-            }
-        };
-    } catch (error) {
-        return {
-            name: 'redis_cache',
-            status: 'unhealthy',
-            responseTime: Date.now() - startTime,
-            lastCheck: new Date(),
-            details: {
-                error: error instanceof Error ? error.message : 'Connection failed'
-            }
-        };
-    }
-}
-
-/**
- * Check embedding service health
- */
-async function checkEmbeddingService(): Promise<ServiceHealth> {
-    const startTime = Date.now();
-
-    try {
-        // TODO: Implement actual embedding service health check
-        // For now, simulate a health check
-        await new Promise(resolve => setTimeout(resolve, 15));
-
-        return {
-            name: 'embedding_service',
-            status: 'healthy',
-            responseTime: Date.now() - startTime,
-            lastCheck: new Date(),
-            details: {
-                provider: process.env.EMBEDDING_PROVIDER || 'openai',
-                model: process.env.EMBEDDING_MODEL || 'text-embedding-ada-002'
-            }
-        };
-    } catch (error) {
-        return {
-            name: 'embedding_service',
-            status: 'unhealthy',
-            responseTime: Date.now() - startTime,
-            lastCheck: new Date(),
-            details: {
-                error: error instanceof Error ? error.message : 'Service unavailable'
-            }
-        };
-    }
-}
-
-/**
- * Check data sources health
- */
-async function checkDataSources(): Promise<ServiceHealth> {
-    const startTime = Date.now();
-
-    try {
-        // TODO: Implement actual data sources health check
-        // For now, simulate checking configured data sources
-        await new Promise(resolve => setTimeout(resolve, 20));
-
-        return {
-            name: 'data_sources',
-            status: 'healthy',
-            responseTime: Date.now() - startTime,
-            lastCheck: new Date(),
-            details: {
-                total_sources: 0,
-                active_sources: 0,
-                failed_sources: 0
-            }
-        };
-    } catch (error) {
-        return {
-            name: 'data_sources',
-            status: 'unhealthy',
-            responseTime: Date.now() - startTime,
-            lastCheck: new Date(),
-            details: {
-                error: error instanceof Error ? error.message : 'Sources check failed'
-            }
-        };
-    }
+    return systemHealth.components
+        .filter(component => criticalComponents.includes(component.name))
+        .map(component => ({
+            name: component.name,
+            status: component.status === 'degraded' ? 'healthy' : component.status,
+            responseTime: component.responseTime,
+            lastCheck: component.lastCheck,
+            details: component.details
+        }));
 }
