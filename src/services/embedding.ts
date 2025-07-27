@@ -1,5 +1,4 @@
 import { HfInference } from '@huggingface/inference';
-import { pipeline } from '@xenova/transformers';
 import Redis from 'ioredis';
 import OpenAI from 'openai';
 import { DataSourceError, RateLimitError, TimeoutError } from '../utils/errors';
@@ -75,6 +74,7 @@ export class EmbeddingService {
                     break;
 
                 case 'local':
+                    const { pipeline } = await import('@xenova/transformers');
                     this.localPipeline = await pipeline('feature-extraction', this.config.model);
                     break;
 
